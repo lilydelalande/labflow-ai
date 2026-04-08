@@ -1,13 +1,14 @@
 """
-vlp_measure.py — Gold nanoparticle detection in VLP TEM images
+vlp_measure.py — Gold NP + capsid measurement in VLP TEM images
 
 Detects gold nanoparticles (dense, near-black circular blobs) in Gatan
-.dm3 / .dm4 TEM images and reports their diameters in nm.
+.dm3 / .dm4 TEM images, then finds the surrounding capsid shell via
+radial intensity profile gradient detection.
 
-Outputs:
-  - overlay image with detected NPs circled (PNG)
-  - size histogram (PNG)
-  - CSV with per-particle measurements
+Two measurements per particle:
+  - gold_diameter_nm   : diameter of the gold nanoparticle core
+  - capsid_diameter_nm : outer diameter of the capsid shell
+                         (NaN for naked cores with no detectable capsid)
 
 Usage:
     uv run python vlp_measure.py <image_path> [options]
@@ -15,7 +16,8 @@ Usage:
 Examples:
     uv run python vlp_measure.py "images/VLPs for machine learning project/VLP17_0001.dm4"
     uv run python vlp_measure.py "images/VLPs for machine learning project" --pattern "VLP17_*"
-    uv run python vlp_measure.py "images/" --gold-threshold 0.04 --min-gold-nm 12
+    uv run python vlp_measure.py "images/" --debug
+    uv run python vlp_measure.py "images/" --max-capsid-nm 80
 """
 
 import argparse
@@ -28,6 +30,8 @@ import ncempy.io as nio
 import numpy as np
 import pandas as pd
 from scipy import ndimage as ndi
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 from skimage import exposure, filters, morphology, measure
 
 
@@ -53,23 +57,18 @@ def normalise(img: np.ndarray) -> np.ndarray:
 def auto_threshold(img_norm: np.ndarray, gold_threshold: float | None) -> float:
     """
     Find the intensity cutoff for gold NPs automatically per image.
-
-    Uses the valley between the dark gold-NP peak and the brighter background
-    in the intensity histogram (multi-Otsu on the dark half of the image).
-    Falls back to the user-supplied value if automatic detection fails.
+    Uses Otsu on the dark half of the histogram. Falls back to manual value
+    if provided.
     """
     if gold_threshold is not None:
         return gold_threshold
 
-    # Only look at the dark half of the histogram where gold NPs live
     dark_pixels = img_norm[img_norm < 0.5]
     if len(dark_pixels) < 100:
         return 0.05
 
     try:
-        # Two-class Otsu on the dark pixels finds the valley between noise and gold
-        thresh = filters.threshold_otsu(dark_pixels)
-        return float(thresh)
+        return float(filters.threshold_otsu(dark_pixels))
     except Exception:
         return 0.05
 
@@ -83,13 +82,8 @@ def detect_gold(
 ) -> tuple[pd.DataFrame, float]:
     """
     Detect gold NPs by intensity thresholding.
-
-    Gold NPs are the darkest feature in the image. The threshold is found
-    automatically per image (recommended) or can be set manually.
-    Results are filtered to [min_gold_nm, max_gold_nm] to reject noise
-    and aggregates.
-
-    Returns (DataFrame: centroid_y, centroid_x, diameter_nm), threshold_used.
+    Returns (DataFrame: centroid_y, centroid_x, gold_diameter_nm, gold_radius_px),
+    threshold_used.
     """
     t = auto_threshold(img_norm, threshold)
     binary = img_norm < t
@@ -102,19 +96,118 @@ def detect_gold(
     )
     df = pd.DataFrame(props)
     if df.empty:
-        return pd.DataFrame(columns=["centroid_y", "centroid_x", "diameter_nm"])
+        return pd.DataFrame(
+            columns=["centroid_y", "centroid_x", "gold_diameter_nm", "gold_radius_px"]
+        ), t
 
-    df["diameter_nm"] = 2 * np.sqrt(df["area"] / np.pi) * nm_per_px
+    df["gold_diameter_nm"] = 2 * np.sqrt(df["area"] / np.pi) * nm_per_px
+    df["gold_radius_px"] = np.sqrt(df["area"] / np.pi)
 
     df = df[
         (df["solidity"] > 0.75)
         & (df["eccentricity"] < 0.75)
-        & (df["diameter_nm"] >= min_gold_nm)
-        & (df["diameter_nm"] <= max_gold_nm)
+        & (df["gold_diameter_nm"] >= min_gold_nm)
+        & (df["gold_diameter_nm"] <= max_gold_nm)
     ]
 
     df = df.rename(columns={"centroid-0": "centroid_y", "centroid-1": "centroid_x"})
-    return df[["centroid_y", "centroid_x", "diameter_nm"]].reset_index(drop=True), t
+    return (
+        df[["centroid_y", "centroid_x", "gold_diameter_nm", "gold_radius_px"]].reset_index(drop=True),
+        t,
+    )
+
+
+# ── Capsid detection via radial profile ───────────────────────────────────────
+
+def radial_profile(
+    img: np.ndarray,
+    cy: float,
+    cx: float,
+    r_start: int,
+    r_end: int,
+    n_angles: int = 360,
+) -> np.ndarray:
+    """
+    Mean intensity at each radius from r_start to r_end pixels from (cy, cx).
+    Returns array of length (r_end - r_start).
+    """
+    h, w = img.shape
+    angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
+    profile = np.zeros(r_end - r_start)
+
+    for i, r in enumerate(range(r_start, r_end)):
+        ys = np.clip((cy + r * np.sin(angles)).astype(int), 0, h - 1)
+        xs = np.clip((cx + r * np.cos(angles)).astype(int), 0, w - 1)
+        profile[i] = img[ys, xs].mean()
+
+    return profile
+
+
+def find_capsid_edge(
+    img_norm: np.ndarray,
+    cy: float,
+    cx: float,
+    gold_radius_px: float,
+    max_capsid_nm: float,
+    nm_per_px: float,
+    smooth_sigma: float = 3.0,
+) -> float | None:
+    """
+    Find capsid outer radius via radial intensity profile gradient.
+
+    Searches outward from just beyond the gold NP edge. The capsid outer wall
+    is where the intensity rises most steeply (peak gradient) as it transitions
+    from the darker capsid region to the bright background.
+
+    smooth_sigma controls Gaussian smoothing of the profile before gradient
+    computation — higher values are more robust to the speckled capsid texture
+    but may shift the detected edge slightly.
+
+    Returns capsid radius in pixels, or None if no clear edge found.
+    """
+    r_start = max(1, int(gold_radius_px))
+    r_end = r_start + int(max_capsid_nm / nm_per_px)
+    r_end = min(r_end, min(img_norm.shape) // 2)
+
+    if r_end <= r_start:
+        return None
+
+    profile = radial_profile(img_norm, cy, cx, r_start, r_end)
+
+    # Smooth to suppress speckle noise before finding the minimum
+    smoothed = gaussian_filter1d(profile, sigma=smooth_sigma)
+
+    # The capsid wall is a dark ring = local minimum in the radial profile.
+    # Skip the first few nm beyond the gold edge to avoid catching the
+    # intensity recovery from the gold NP itself as a false minimum.
+    skip_nm = 5.0
+    skip_px = int(skip_nm / nm_per_px)
+
+    search = smoothed[skip_px:]
+    if len(search) < 3:
+        return None
+
+    # Find minima as peaks in the inverted profile.
+    # prominence: the dip must stand out clearly from its surroundings.
+    # distance: minima must be at least 3 nm apart (avoids noise spikes).
+    min_dist_px = max(1, int(3.0 / nm_per_px))
+    peaks, props = find_peaks(-search, prominence=0.02, distance=min_dist_px)
+
+    if len(peaks) == 0:
+        return None
+
+    peak_i = peaks[0]
+
+    # Sub-pixel refinement: fit a parabola to the 3 points around the minimum
+    # and find the true bottom, giving continuous (non-quantized) radius values.
+    if 0 < peak_i < len(search) - 1:
+        y0, y1, y2 = search[peak_i - 1], search[peak_i], search[peak_i + 1]
+        denom = 2 * (y0 - 2 * y1 + y2)
+        if denom != 0:
+            subpixel_offset = (y0 - y2) / denom  # offset from peak_i in pixels
+            return float(r_start + skip_px + peak_i + subpixel_offset)
+
+    return float(r_start + skip_px + peak_i)
 
 
 # ── Output ────────────────────────────────────────────────────────────────────
@@ -125,7 +218,13 @@ def save_overlay(
     nm_per_px: float,
     out_path: Path,
     title: str = "",
+    highlight_indices: set | None = None,
 ) -> None:
+    """
+    Gold NP in yellow, capsid in cyan, radius lines for both.
+    Particles in highlight_indices are drawn in orange so you can match
+    them to the debug profile plots.
+    """
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
 
     axes[0].imshow(img_norm, cmap="gray", interpolation="none")
@@ -133,17 +232,47 @@ def save_overlay(
     axes[0].axis("off")
 
     axes[1].imshow(img_norm, cmap="gray", interpolation="none")
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         cx, cy = row["centroid_x"], row["centroid_y"]
-        r_px = row["diameter_nm"] / 2 / nm_per_px
-        axes[1].add_patch(mpatches.Circle(
-            (cx, cy), r_px, linewidth=0.5, edgecolor="yellow", facecolor="none"
-        ))
-        # Radius line so you can see exactly what's being measured
-        axes[1].plot([cx, cx + r_px], [cy, cy], color="yellow", linewidth=0.4)
+        highlighted = highlight_indices is not None and idx in highlight_indices
+        gold_color = "orange" if highlighted else "yellow"
 
-    axes[1].set_title(f"Gold NPs detected (n={len(df)})")
+        # Gold NP
+        r_gold = row["gold_diameter_nm"] / 2 / nm_per_px
+        axes[1].add_patch(mpatches.Circle(
+            (cx, cy), r_gold, linewidth=0.8 if highlighted else 0.5,
+            edgecolor=gold_color, facecolor="none"
+        ))
+        axes[1].plot([cx, cx + r_gold], [cy, cy], color=gold_color, linewidth=0.4)
+
+        # Capsid (only if detected)
+        if not np.isnan(row["capsid_diameter_nm"]):
+            r_cap = row["capsid_diameter_nm"] / 2 / nm_per_px
+            axes[1].add_patch(mpatches.Circle(
+                (cx, cy), r_cap, linewidth=0.8 if highlighted else 0.5,
+                edgecolor="orange" if highlighted else "cyan", facecolor="none"
+            ))
+            axes[1].plot([cx, cx + r_cap], [cy, cy],
+                         color="orange" if highlighted else "cyan", linewidth=0.4)
+
+        # Index label — always shown, larger for highlighted particles
+        axes[1].text(
+            cx, cy - r_gold - 2, str(idx),
+            color="orange" if highlighted else "white",
+            fontsize=5 if highlighted else 3.5,
+            fontweight="bold" if highlighted else "normal",
+            ha="center", va="bottom",
+            bbox=dict(boxstyle="round,pad=0.1", facecolor="black", alpha=0.6, linewidth=0),
+        )
+
+    n_total = len(df)
+    n_capsid = df["capsid_diameter_nm"].notna().sum()
+    axes[1].set_title(f"n={n_total}  ({n_capsid} with capsid)")
     axes[1].axis("off")
+    axes[1].legend(handles=[
+        mpatches.Patch(color="yellow", label="Gold NP"),
+        mpatches.Patch(color="cyan", label="Capsid"),
+    ], loc="lower right", fontsize=7)
 
     if title:
         fig.suptitle(title, fontsize=11)
@@ -152,20 +281,100 @@ def save_overlay(
     plt.close(fig)
 
 
-def save_histogram(df_all: pd.DataFrame, out_path: Path) -> None:
-    data = df_all["diameter_nm"]
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.hist(data, bins=30, edgecolor="white", color="gold")
-    ax.axvline(data.mean(), color="tomato", linewidth=2,
-               label=f"mean = {data.mean():.1f} ± {data.std():.1f} nm  (n={len(data)})")
-    ax.set_xlabel("Gold NP diameter (nm)")
-    ax.set_ylabel("Count")
-    ax.set_title("Gold NP size distribution")
-    ax.legend()
+def save_debug_profiles(
+    img_norm: np.ndarray,
+    df: pd.DataFrame,
+    nm_per_px: float,
+    max_capsid_nm: float,
+    out_path: Path,
+    indices: list[int] | None = None,
+) -> None:
+    """Plot radial profiles for specific particles so you can inspect capsid detection."""
+    if indices is not None:
+        sample = df.loc[[i for i in indices if i in df.index]]
+    else:
+        sample = df.dropna(subset=["capsid_diameter_nm"]).head(6)
+    if sample.empty:
+        return
+
+    cols = min(len(sample), 3)
+    rows = (len(sample) + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 4 * rows))
+    axes = np.array(axes).flatten()
+
+    for ax, (idx, row) in zip(axes, sample.iterrows()):
+        cy, cx = row["centroid_y"], row["centroid_x"]
+        gold_r = row["gold_radius_px"]
+        r_start = max(1, int(gold_r))
+        r_end = r_start + int(max_capsid_nm / nm_per_px)
+        r_end = min(r_end, min(img_norm.shape) // 2)
+
+        profile = radial_profile(img_norm, cy, cx, r_start, r_end)
+        smoothed = gaussian_filter1d(profile, sigma=3.0)
+        radii_nm = (r_start + np.arange(len(profile))) * nm_per_px
+
+        ax.plot(radii_nm, profile, color="lightsteelblue", linewidth=1, label="raw")
+        ax.plot(radii_nm, smoothed, color="steelblue", linewidth=1.5, label="smoothed")
+        ax.axvline(row["gold_diameter_nm"] / 2, color="yellow", linewidth=1.5,
+                   label=f"gold r = {row['gold_diameter_nm']/2:.1f} nm")
+        ax.axvline(row["capsid_diameter_nm"] / 2, color="cyan", linewidth=1.5,
+                   label=f"capsid r = {row['capsid_diameter_nm']/2:.1f} nm")
+        ax.set_xlabel("Radius (nm)")
+        ax.set_ylabel("Intensity")
+        ax.set_title(f"#{idx}  ({cx:.0f}, {cy:.0f})")
+        ax.legend(fontsize=7)
+
+    for ax in axes[len(sample):]:
+        ax.set_visible(False)
+
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Histogram  → {out_path}")
+    print(f"  Debug      → {out_path}")
+
+
+def save_scatter(df_all: pd.DataFrame, out_path: Path) -> None:
+    df = df_all.dropna(subset=["capsid_diameter_nm"])
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.scatter(df["gold_diameter_nm"], df["capsid_diameter_nm"],
+               alpha=0.5, s=18, color="steelblue", edgecolors="none")
+    ax.axvline(df["gold_diameter_nm"].mean(), color="gold", linewidth=1.2, linestyle="--",
+               label=f"gold mean = {df['gold_diameter_nm'].mean():.1f} nm")
+    ax.axhline(df["capsid_diameter_nm"].mean(), color="cyan", linewidth=1.2, linestyle="--",
+               label=f"capsid mean = {df['capsid_diameter_nm'].mean():.1f} nm")
+    ax.set_xlabel("Gold NP diameter (nm)")
+    ax.set_ylabel("VLP capsid diameter (nm)")
+    ax.set_title(f"VLP capsid vs gold NP diameter  (n={len(df)})")
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Scatter    → {out_path}")
+
+
+def save_histograms(df_all: pd.DataFrame, out_path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    for ax, col, label, color in [
+        (axes[0], "gold_diameter_nm", "Gold NP diameter (nm)", "gold"),
+        (axes[1], "capsid_diameter_nm", "Capsid diameter (nm)", "steelblue"),
+    ]:
+        data = df_all[col].dropna()
+        if len(data) == 0:
+            ax.set_title(f"{label}\n(no data)")
+            continue
+        bins = np.arange(np.floor(data.min()), np.ceil(data.max()) + 1, 1)
+        ax.hist(data, bins=bins, edgecolor="white", linewidth=0.5, color=color)
+        ax.axvline(data.mean(), color="tomato", linewidth=2,
+                   label=f"mean = {data.mean():.1f} ± {data.std():.1f} nm\n(n={len(data)})")
+        ax.set_xlabel(label)
+        ax.set_ylabel("Count")
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Histograms → {out_path}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -181,13 +390,28 @@ def main() -> None:
                         help="Glob when image_path is a folder (default: all dm files)")
     parser.add_argument("--out", type=Path, default=Path("results"),
                         help="Output directory (default: results/)")
+
+    # Gold NP tuning
     parser.add_argument("--gold-threshold", type=float, default=None,
-                        help="Intensity cutoff for gold detection (default: auto per image; "
-                             "set manually if auto gives wrong results)")
+                        help="Intensity cutoff for gold detection (default: auto per image)")
     parser.add_argument("--min-gold-nm", type=float, default=10.0,
-                        help="Minimum NP diameter to keep (default 10 nm)")
+                        help="Minimum gold NP diameter (default 10 nm)")
     parser.add_argument("--max-gold-nm", type=float, default=30.0,
-                        help="Maximum NP diameter to keep (default 30 nm)")
+                        help="Maximum gold NP diameter (default 30 nm)")
+
+    # Capsid tuning
+    parser.add_argument("--max-capsid-nm", type=float, default=150.0,
+                        help="Max distance from gold edge to search for capsid (default 150 nm)")
+    parser.add_argument("--smooth-sigma", type=float, default=3.0,
+                        help="Gaussian smoothing of radial profile before gradient (default 3.0; "
+                             "increase if capsid ring is very noisy)")
+
+    # Debug
+    parser.add_argument("--debug", action="store_true",
+                        help="Save radial profile plots to inspect capsid edge detection")
+    parser.add_argument("--debug-indices", type=int, nargs="+", default=None,
+                        help="Specific particle indices to show in debug profiles (default: first 6 with capsid)")
+
     args = parser.parse_args()
 
     p = args.image_path
@@ -218,40 +442,81 @@ def main() -> None:
         print(f"  {img.shape[0]}×{img.shape[1]} px  |  {nm_per_px:.4f} nm/px")
 
         img_norm = normalise(img)
-        df, t_used = detect_gold(img_norm, nm_per_px, args.gold_threshold,
-                                 args.min_gold_nm, args.max_gold_nm)
-        df.insert(0, "file", path.name)
-        all_rows.append(df)
 
-        n = len(df)
-        if n:
-            print(f"  threshold  {t_used:.4f} (auto)" if args.gold_threshold is None
-                  else f"  threshold  {t_used:.4f} (manual)")
-            print(f"  {n} gold NPs  |  mean {df['diameter_nm'].mean():.1f} ± "
-                  f"{df['diameter_nm'].std():.1f} nm")
-        else:
-            print("  No gold NPs detected — try adjusting --gold-threshold or --min/max-gold-nm")
+        df_gold, t_used = detect_gold(
+            img_norm, nm_per_px, args.gold_threshold, args.min_gold_nm, args.max_gold_nm
+        )
+        print(f"  threshold  {t_used:.4f} {'(auto)' if args.gold_threshold is None else '(manual)'}")
+        print(f"  {len(df_gold)} gold NPs detected")
+
+        # Measure capsid for each gold NP
+        capsid_diameters = []
+        capsid_radii_px = []
+        for _, g in df_gold.iterrows():
+            r_px = find_capsid_edge(
+                img_norm,
+                g["centroid_y"], g["centroid_x"],
+                g["gold_radius_px"],
+                args.max_capsid_nm,
+                nm_per_px,
+                smooth_sigma=args.smooth_sigma,
+            )
+            capsid_radii_px.append(r_px)
+            capsid_diameters.append(2 * r_px * nm_per_px if r_px else np.nan)
+
+        df_gold["capsid_diameter_nm"] = capsid_diameters
+        df_gold["capsid_radius_px"] = capsid_radii_px
+        df_gold = df_gold.reset_index(drop=True)  # ensure index matches overlay labels
+        df_gold.insert(0, "file", path.name)
+        all_rows.append(df_gold)
+
+        n_capsid = df_gold["capsid_diameter_nm"].notna().sum()
+        print(f"  {n_capsid}/{len(df_gold)} capsids detected")
+        if n_capsid:
+            cd = df_gold["capsid_diameter_nm"].dropna()
+            print(f"  gold   mean {df_gold['gold_diameter_nm'].mean():.1f} ± {df_gold['gold_diameter_nm'].std():.1f} nm")
+            print(f"  capsid mean {cd.mean():.1f} ± {cd.std():.1f} nm")
+
+        # Determine which particles will appear in debug profiles
+        highlight = None
+        if args.debug:
+            if args.debug_indices:
+                sample_idx = [i for i in args.debug_indices if i in df_gold.index]
+            else:
+                sample_idx = df_gold.dropna(subset=["capsid_diameter_nm"]).head(6).index.tolist()
+            highlight = set(sample_idx)
 
         overlay_path = overlay_dir / (path.stem + "_overlay.png")
-        save_overlay(img_norm, df, nm_per_px, overlay_path, title=path.name)
+        save_overlay(img_norm, df_gold, nm_per_px, overlay_path,
+                     title=path.name, highlight_indices=highlight)
         print(f"  Overlay    → {overlay_path}")
+
+        if args.debug:
+            debug_path = overlay_dir / (path.stem + "_profiles.png")
+            save_debug_profiles(img_norm, df_gold, nm_per_px, args.max_capsid_nm,
+                                debug_path, indices=sample_idx)
 
     results = pd.concat(all_rows, ignore_index=True)
 
-    csv_path = args.out / "gold_np_diameters.csv"
+    csv_path = args.out / "vlp_measurements.csv"
     results.to_csv(csv_path, index=False)
     print(f"\n  CSV        → {csv_path}")
 
-    hist_path = args.out / "gold_np_histogram.png"
-    save_histogram(results, hist_path)
+    hist_path = args.out / "vlp_histograms.png"
+    save_histograms(results, hist_path)
+
+    scatter_path = args.out / "vlp_scatter.png"
+    save_scatter(results, scatter_path)
 
     print("\n── Summary ──────────────────────────────────────────────")
-    data = results["diameter_nm"]
-    print(f"  n       {len(data)}")
-    print(f"  mean    {data.mean():.1f} nm")
-    print(f"  std     {data.std():.1f} nm")
-    print(f"  median  {data.median():.1f} nm")
-    print(f"  range   {data.min():.1f} – {data.max():.1f} nm")
+    for col, label in [("gold_diameter_nm", "Gold NP"), ("capsid_diameter_nm", "Capsid")]:
+        data = results[col].dropna()
+        if len(data):
+            print(f"\n{label} (n={len(data)}):")
+            print(f"  mean    {data.mean():.1f} nm")
+            print(f"  std     {data.std():.1f} nm")
+            print(f"  median  {data.median():.1f} nm")
+            print(f"  range   {data.min():.1f} – {data.max():.1f} nm")
 
 
 if __name__ == "__main__":
