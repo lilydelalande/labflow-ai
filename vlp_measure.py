@@ -335,16 +335,23 @@ def save_debug_profiles(
 
 def save_scatter(df_all: pd.DataFrame, out_path: Path) -> None:
     df = df_all.dropna(subset=["capsid_diameter_nm"])
+    reliable = df[df["is_reliable"]] if "is_reliable" in df.columns else df
+    unreliable = df[~df["is_reliable"]] if "is_reliable" in df.columns else pd.DataFrame()
+
     fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(df["gold_diameter_nm"], df["capsid_diameter_nm"],
-               alpha=0.5, s=18, color="steelblue", edgecolors="none")
-    ax.axvline(df["gold_diameter_nm"].mean(), color="gold", linewidth=1.2, linestyle="--",
-               label=f"gold mean = {df['gold_diameter_nm'].mean():.1f} nm")
-    ax.axhline(df["capsid_diameter_nm"].mean(), color="cyan", linewidth=1.2, linestyle="--",
-               label=f"capsid mean = {df['capsid_diameter_nm'].mean():.1f} nm")
+    ax.scatter(reliable["gold_diameter_nm"], reliable["capsid_diameter_nm"],
+               alpha=0.5, s=18, color="steelblue", edgecolors="none", label="reliable")
+    if not unreliable.empty:
+        ax.scatter(unreliable["gold_diameter_nm"], unreliable["capsid_diameter_nm"],
+                   alpha=0.7, s=40, color="tomato", marker="x",
+                   label=f"flagged ({len(unreliable)})")
+    ax.axvline(reliable["gold_diameter_nm"].mean(), color="gold", linewidth=1.2, linestyle="--",
+               label=f"gold mean = {reliable['gold_diameter_nm'].mean():.1f} nm")
+    ax.axhline(reliable["capsid_diameter_nm"].mean(), color="cyan", linewidth=1.2, linestyle="--",
+               label=f"capsid mean = {reliable['capsid_diameter_nm'].mean():.1f} nm")
     ax.set_xlabel("Gold NP diameter (nm)")
     ax.set_ylabel("VLP capsid diameter (nm)")
-    ax.set_title(f"VLP capsid vs gold NP diameter  (n={len(df)})")
+    ax.set_title(f"VLP capsid vs gold NP diameter  (n={len(reliable)} reliable, {len(unreliable)} flagged)")
     ax.legend(fontsize=9)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -467,15 +474,29 @@ def main() -> None:
         df_gold["capsid_diameter_nm"] = capsid_diameters
         df_gold["capsid_radius_px"] = capsid_radii_px
         df_gold = df_gold.reset_index(drop=True)  # ensure index matches overlay labels
+
+        # Reliability flag: capsid within 2 std of per-image median
+        cd = df_gold["capsid_diameter_nm"].dropna()
+        if len(cd) > 2:
+            median = cd.median()
+            std = cd.std()
+            df_gold["is_reliable"] = (
+                df_gold["capsid_diameter_nm"].isna() |
+                df_gold["capsid_diameter_nm"].between(median - 2 * std, median + 2 * std)
+            )
+        else:
+            df_gold["is_reliable"] = True
+
         df_gold.insert(0, "file", path.name)
         all_rows.append(df_gold)
 
         n_capsid = df_gold["capsid_diameter_nm"].notna().sum()
-        print(f"  {n_capsid}/{len(df_gold)} capsids detected")
+        n_unreliable = (~df_gold["is_reliable"]).sum()
+        print(f"  {n_capsid}/{len(df_gold)} capsids detected  |  {n_unreliable} flagged unreliable")
         if n_capsid:
-            cd = df_gold["capsid_diameter_nm"].dropna()
+            reliable = df_gold[df_gold["is_reliable"] & df_gold["capsid_diameter_nm"].notna()]
             print(f"  gold   mean {df_gold['gold_diameter_nm'].mean():.1f} ± {df_gold['gold_diameter_nm'].std():.1f} nm")
-            print(f"  capsid mean {cd.mean():.1f} ± {cd.std():.1f} nm")
+            print(f"  capsid mean {reliable['capsid_diameter_nm'].mean():.1f} ± {reliable['capsid_diameter_nm'].std():.1f} nm  (reliable only)")
 
         # Determine which particles will appear in debug profiles
         highlight = None
@@ -509,14 +530,21 @@ def main() -> None:
     save_scatter(results, scatter_path)
 
     print("\n── Summary ──────────────────────────────────────────────")
-    for col, label in [("gold_diameter_nm", "Gold NP"), ("capsid_diameter_nm", "Capsid")]:
-        data = results[col].dropna()
-        if len(data):
-            print(f"\n{label} (n={len(data)}):")
-            print(f"  mean    {data.mean():.1f} nm")
-            print(f"  std     {data.std():.1f} nm")
-            print(f"  median  {data.median():.1f} nm")
-            print(f"  range   {data.min():.1f} – {data.max():.1f} nm")
+    gold = results["gold_diameter_nm"].dropna()
+    print(f"\nGold NP (n={len(gold)}):")
+    print(f"  mean    {gold.mean():.1f} nm")
+    print(f"  std     {gold.std():.1f} nm")
+    print(f"  median  {gold.median():.1f} nm")
+    print(f"  range   {gold.min():.1f} – {gold.max():.1f} nm")
+
+    reliable_capsid = results[results["is_reliable"]]["capsid_diameter_nm"].dropna()
+    all_capsid = results["capsid_diameter_nm"].dropna()
+    n_flagged = (~results["is_reliable"]).sum()
+    print(f"\nCapsid — reliable only (n={len(reliable_capsid)}, {n_flagged} flagged):")
+    print(f"  mean    {reliable_capsid.mean():.1f} nm")
+    print(f"  std     {reliable_capsid.std():.1f} nm")
+    print(f"  median  {reliable_capsid.median():.1f} nm")
+    print(f"  range   {reliable_capsid.min():.1f} – {reliable_capsid.max():.1f} nm")
 
 
 if __name__ == "__main__":
