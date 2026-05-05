@@ -198,13 +198,28 @@ def find_capsid_edge(
 
     peak_i = peaks[0]
 
-    # Sub-pixel refinement: fit a parabola to the 3 points around the minimum
-    # and find the true bottom, giving continuous (non-quantized) radius values.
+    # The dark stain ring minimum is just outside the capsid protein.
+    # The true outer capsid boundary is the steepest descending gradient
+    # on the approach to the minimum (where bright protein → dark stain).
+    approach = search[: peak_i + 1]
+    if len(approach) >= 3:
+        grad = np.gradient(approach)
+        edge_i = int(np.argmin(grad))  # most negative slope = outer protein wall
+        # Sub-pixel refinement on the gradient minimum
+        if 0 < edge_i < len(grad) - 1:
+            g0, g1, g2 = grad[edge_i - 1], grad[edge_i], grad[edge_i + 1]
+            denom = 2 * (g0 - 2 * g1 + g2)
+            if denom != 0:
+                subpixel_offset = (g0 - g2) / denom
+                return float(r_start + skip_px + edge_i + subpixel_offset)
+        return float(r_start + skip_px + edge_i)
+
+    # Fallback: return the minimum itself
     if 0 < peak_i < len(search) - 1:
         y0, y1, y2 = search[peak_i - 1], search[peak_i], search[peak_i + 1]
         denom = 2 * (y0 - 2 * y1 + y2)
         if denom != 0:
-            subpixel_offset = (y0 - y2) / denom  # offset from peak_i in pixels
+            subpixel_offset = (y0 - y2) / denom
             return float(r_start + skip_px + peak_i + subpixel_offset)
 
     return float(r_start + skip_px + peak_i)
