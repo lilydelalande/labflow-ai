@@ -48,7 +48,7 @@ from scipy.spatial import cKDTree
 from skimage import filters
 from skimage.transform import hough_circle, hough_circle_peaks
 
-from vlp_measure import (
+from analysis.vlp_measure import (
     load_dm,
     normalise,
     radial_profile,
