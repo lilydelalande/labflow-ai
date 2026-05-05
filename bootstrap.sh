@@ -82,7 +82,7 @@ fi
 # 4. .gitignore
 hdr "Updating .gitignore"
 touch .gitignore
-for entry in ".labflow/" "incoming/" "results/"; do
+for entry in ".labflow/" "incoming/" "results/" ".venv/"; do
     if ! grep -qxF "$entry" .gitignore; then
         printf "%s\n" "$entry" >> .gitignore
         say "added $entry"
@@ -95,7 +95,35 @@ done
 hdr "Scaffolding incoming/ and results/"
 mkdir -p incoming results
 
-# 6. Done
+# 6. Python environment
+hdr "Setting up Python environment"
+if ! command -v uv >/dev/null 2>&1; then
+    say "uv not found — install from https://docs.astral.sh/uv/"
+    say "skipping dependency install; analysis scripts will fail to import until uv is available"
+elif [ -f pyproject.toml ] && [ ! -L pyproject.toml ]; then
+    # Scientist has their own pyproject.toml. Don't modify it without permission.
+    say "you already have a pyproject.toml in this directory — not touching it"
+    say "to add the labflow dependencies to your project, run:"
+    say "  uv add ncempy pandas matplotlib scipy scikit-image tqdm"
+    say "(or copy them from $CACHE_DIR/pyproject.toml into yours and re-run uv sync)"
+else
+    if [ ! -e pyproject.toml ]; then
+        ln -sfn "$CACHE_DIR/pyproject.toml" pyproject.toml
+        say "pyproject.toml -> $CACHE_DIR/pyproject.toml"
+    fi
+    if [ ! -e uv.lock ] && [ -f "$CACHE_DIR/uv.lock" ]; then
+        ln -sfn "$CACHE_DIR/uv.lock" uv.lock
+        say "uv.lock -> $CACHE_DIR/uv.lock"
+    fi
+    say "running uv sync (slowest step — ~10–30s first time)"
+    if uv sync; then
+        say "deps installed in .venv/"
+    else
+        say "uv sync failed — see error above; analysis imports will not work until resolved"
+    fi
+fi
+
+# 7. Done
 hdr "Ready"
 cat <<EOF
   Drop DM3/DM4 files into incoming/<batch_name>/ and either:

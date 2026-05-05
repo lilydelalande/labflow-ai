@@ -26,9 +26,9 @@ Then proceed normally.
 
 **3b. If MISSING:** ask permission to install, briefly:
 
-> "Looks like the tools aren't installed yet — should take a few seconds. Want me to set them up?"
+> "Looks like the tools aren't installed yet — takes about 30 seconds the first time. Want me to set them up?"
 
-If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls scripts and benchmark data from the lab's GitHub repo, sets up `incoming/` and `results/` folders, takes about 5 seconds, can be removed by deleting `.labflow/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
+If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls the analysis scripts and benchmark data from the lab's GitHub repo, installs the Python packages the scripts need, and sets up `incoming/` and `results/` folders. Most of the time is the package install (~30s first run; near-instant on re-runs). It can be removed by deleting `.labflow/` and `.venv/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
 
 The bootstrap command:
 

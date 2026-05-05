@@ -26,9 +26,9 @@ Then proceed normally. Don't re-run the check on subsequent turns; one per sessi
 
 **3b. If MISSING:** ask permission to install, briefly:
 
-> "Looks like the tools aren't installed yet — should take a few seconds. Want me to set them up?"
+> "Looks like the tools aren't installed yet — takes about 30 seconds the first time. Want me to set them up?"
 
-If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls scripts and benchmark data from the lab's GitHub repo, sets up `incoming/` and `results/` folders, takes about 5 seconds, can be removed by deleting `.labflow/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
+If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls the analysis scripts and benchmark data from the lab's GitHub repo, installs the Python packages the scripts need, and sets up `incoming/` and `results/` folders. Most of the time is the package install (~30s first run; near-instant on re-runs). It can be removed by deleting `.labflow/` and `.venv/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
 
 The bootstrap command:
 
@@ -41,8 +41,6 @@ When you invoke it, the user sees Claude Code's permission prompt — that's a s
 If the scientist explicitly says "update labflow" or "pull latest" later, re-run the same bootstrap command — it's idempotent and updates the cached clone in place. You don't need to re-explain in that case; they already know what's happening.
 
 After bootstrap completes, the lab-pipeline skill at `.claude/skills/lab-pipeline/SKILL.md` becomes invocable (Claude Code discovers skills dynamically — no restart needed). Read it before doing actual analysis work.
-
-## How to approach image analysis tasks
 
 ## How to approach image analysis tasks
 
