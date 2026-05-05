@@ -67,7 +67,20 @@ uv run python -m analysis.vlp_measure_v2 "incoming/2026-05-15_VLP17_batch4" \
     --sample-type VLP --out results/vlp17_batch4 --workers 6
 ```
 
-Both produce: `vlp_measurements.csv`, `overlays/*.png`, histograms, scatter, and a `SUMMARY.md` with the headline + per-image table.
+Both produce, inside the directory passed as `out_dir` (or `--out`):
+
+```
+results/<batch_name>/
+├── SUMMARY.md            # headline + per-image table — read this first
+├── vlp_measurements.csv  # one row per detected gold NP, with per-particle metrics
+├── vlp_histograms.png    # gold + capsid distributions
+├── vlp_scatter.png       # gold-vs-capsid scatter
+└── overlays/
+    ├── VLP17_0001_overlay.png
+    └── …                 # one per input image, raw on left, detections on right
+```
+
+All paths in the dict returned by `run()` are absolute and point inside `out_dir`. By convention, mirror the incoming folder name: `incoming/foo_batch/` → `out_dir=results/foo_batch/`. `out_dir` is created if it doesn't exist.
 
 ## Data model
 
