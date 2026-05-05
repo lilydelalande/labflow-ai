@@ -2,6 +2,48 @@
 
 This project is an image data analysis co-scientist for electron microscopy (TEM) data from a biology lab. The goal is to automate measurement of particle sizes (diameters, capsid shells, etc.) from Gatan .dm3 / .dm4 images, with results that are trustworthy enough to replace or augment hand measurement in ImageJ.
 
+The analysis stack (scripts + skill + benchmarks) is distributed via the `labflow-ai` GitHub repo. Any lab repo that wants to do TEM analysis includes this CLAUDE.md, which tells you (the agent) how to bootstrap the stack on first use.
+
+## Bootstrap rule (first user interaction in a fresh repo)
+
+On the **first turn of any session** in this repo, before doing anything else, follow this sequence:
+
+**1. Greet and announce the check** (one sentence, conversational, no jargon):
+
+> "Hi! Quick check first — making sure the lab's analysis tools are set up in this folder."
+
+**2. Run the check:**
+
+```bash
+test -f .claude/skills/lab-pipeline/SKILL.md && echo INSTALLED || echo MISSING
+```
+
+**3a. If INSTALLED:** confirm briefly and ask what they want to do:
+
+> "All set. What would you like to analyze?"
+
+Then proceed normally. Don't re-run the check on subsequent turns; one per session is enough.
+
+**3b. If MISSING:** ask permission to install, briefly:
+
+> "Looks like the tools aren't installed yet — should take a few seconds. Want me to set them up?"
+
+If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls scripts and benchmark data from the lab's GitHub repo, sets up `incoming/` and `results/` folders, takes about 5 seconds, can be removed by deleting `.labflow/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
+
+The bootstrap command:
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh)
+```
+
+When you invoke it, the user sees Claude Code's permission prompt — that's a second consent step. Don't try to suppress it.
+
+If the scientist explicitly says "update labflow" or "pull latest" later, re-run the same bootstrap command — it's idempotent and updates the cached clone in place. You don't need to re-explain in that case; they already know what's happening.
+
+After bootstrap completes, the lab-pipeline skill at `.claude/skills/lab-pipeline/SKILL.md` becomes invocable (Claude Code discovers skills dynamically — no restart needed). Read it before doing actual analysis work.
+
+## How to approach image analysis tasks
+
 ## How to approach image analysis tasks
 
 **Decompose — anchor on the easiest feature first.**
@@ -35,9 +77,9 @@ Run scripts with `uv run python`. Add dependencies with `uv add`.
 
 | Sample | Script | Anchors on |
 |--------|--------|------------|
-| VLPs with gold NP core | `vlp_measure.py` | Gold NP (near-black, circular) |
-| Bare gold NPs | `vlp_measure.py` (gold only) | Gold NP |
-| Plain viruses (e.g. BMV) | TBD | Outer capsid shell |
+| VLPs with gold NP core | `analysis/vlp_measure_v2.py` | Gold NP (near-black, circular) |
+| Bare gold NPs | `analysis/vlp_measure_v2.py` (gold only) | Gold NP |
+| Plain viruses (e.g. BMV, BOG) | `analysis/bmv_measure.py` | Bright protein ring + dark stain pool |
 
 ## Evaluation approach
 

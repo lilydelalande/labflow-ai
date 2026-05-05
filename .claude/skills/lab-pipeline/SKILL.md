@@ -25,10 +25,10 @@ The eval / approve / validate tools are still being designed. Right now the work
 
 ### `vlp_measure_v2.run()` — measure a VLP sample
 
-Located in `vlp_measure_v2.py`. Call from Python:
+Located in `analysis/vlp_measure_v2.py`. Call from Python:
 
 ```python
-from vlp_measure_v2 import run
+from analysis.vlp_measure_v2 import run
 
 result = run(
     image_path="incoming/2026-05-15_VLP17_batch4",   # file or directory
@@ -85,30 +85,47 @@ Prefer `Bash`:
 ```bash
 uv run python -c "
 import json
-from vlp_measure_v2 import run
+from analysis.vlp_measure_v2 import run
 r = run(image_path='...', batch_id='...', out_dir='...', workers=6)
 print(json.dumps(r, indent=2))
 "
 ```
 
-The full result is small (kilobytes) — fine to ingest as one tool result. If a user wants to run the same thing via the terminal, they invoke `uv run python vlp_measure_v2.py …` directly; the CLI wrapper calls the same `run()` and prints a headline.
+The full result is small (kilobytes) — fine to ingest as one tool result. If a user wants to run the same thing via the terminal, they invoke `uv run python -m analysis.vlp_measure_v2 …` directly; the CLI wrapper calls the same `run()` and prints a headline.
 
 ## File conventions
 
-- `incoming/<date>_<sample>_batch<N>/` — DM3/DM4 dump location. `sample.txt` (or json) inside specifies `sample_type` and optional `batch_id`.
-- `results/<run_name>/` — measurement output: CSV, overlays, plots, SUMMARY.md.
-- `results/<run_name>/hand/` — hand-measurement CSVs for this batch (when available).
-- `benchmarks/<sample_type>/gold_standard.csv` — curated approved runs (manual gate). Not yet implemented; design banked in `LAB_NOTEBOOK.md` under "2026-05-03 — VLP measurement v2 + per-image quality diagnosis".
+All paths are relative to the **current working directory** (the repo root the scientist is in). Do not write outside it.
+
+- `incoming/<batch_name>/` — DM3/DM4 dump location, one subfolder per batch. Filenames inside the folder are arbitrary.
+- `results/<batch_name>/` — measurement output: CSV, overlays, plots, SUMMARY.md. Mirrors the incoming folder name 1:1.
+- `results/<batch_name>/hand/` — hand-measurement CSVs for this batch (when available).
+- `benchmarks/<sample_type>/gold_standard.csv` — curated approved runs (manual gate). Not yet implemented; design banked in `LAB_NOTEBOOK.md`.
 - `benchmarks/<sample_type>/hand_measurements.csv` — per-particle hand data, joined to runs by `batch_id`. Not yet implemented.
 - `LAB_NOTEBOOK.md` — append a dated section any time you make a non-trivial decision (new sample type, threshold change, etc).
 
+### First-time directory setup
+If `incoming/`, `results/`, or `benchmarks/` don't exist in the current working directory, **create them on first use** — but explain what you're doing first, in one short message:
+
+> "I don't see `incoming/` or `results/` here yet. I'll create them in the current directory. New batches go in `incoming/<batch_name>/`, results land in `results/<batch_name>/`, and gold-standard reference data lives in `benchmarks/<sample_type>/`."
+
+Then run `mkdir -p incoming results benchmarks` and continue. Don't ask permission — these are inert empty folders, fully reversible. Do this once per fresh repo, never again.
+
 ## Standard scientist workflows
 
-### "Measure this batch"
-1. Read `sample.txt` (or ask) for `sample_type`. `batch_id` auto-derives from the folder name; only override if the scientist explicitly supplies a different tag.
-2. Call `run(image_path=…, sample_type=…, out_dir=results/<batch_name>)`.
-3. Quote the headline (n_reliable, capsid mean ± std, drop rate) and link to the overlays + SUMMARY.md.
-4. Flag any per-image entry whose `reliable_rate < 0.7` or `wall_fit_success_rate < 0.85` — those are candidates for hand validation.
+### "Analyze the new images" / "measure batch X"
+
+The scientist should never have to specify `sample_type` if you can figure it out yourself.
+
+1. **Locate the batch folder.** If they named it (`"the VLP17 batch I just dropped"`), look in `incoming/` for the obvious match. If they didn't, list `incoming/*` and ask only if it's ambiguous.
+2. **Infer `sample_type` from the folder/filename.** Folder names like `VLP17_*`, `VLP_100_*`, `VLP20_*` → `sample_type="VLP"`. Names containing `BMV` or `BOG` → `sample_type="BMV"`. If the folder name is uninformative, peek at one of the filenames inside (`VLP17_0001.dm4` → VLP). Only ask the scientist if both folder name and filenames are uninformative.
+3. **`batch_id` auto-derives** from the folder name — don't pass it explicitly.
+4. **Set `out_dir=results/<folder_name>`** so results mirror the incoming folder structure.
+5. **Call `run(...)`** and read the resulting `SUMMARY.md`.
+6. **Quote the headline back** — n_reliable, capsid mean ± std, drop rate, link to overlays + SUMMARY.md.
+7. **Flag suspicious images:** any `per_image` entry with `reliable_rate < 0.7` or `wall_fit_success_rate < 0.85` is a candidate for hand validation. Name them explicitly in the response.
+
+The scientist's bar should be: drop a folder in `incoming/`, say "analyze it" with at most a folder hint. The agent does the rest. Asking "what sample type?" when it's `VLP17_*.dm4` files is a failure mode — don't.
 
 ### "Compare to my hand measurements"
 Phase 1 doesn't have a paired-comparison tool yet. Until it does:

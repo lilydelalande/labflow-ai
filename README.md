@@ -2,28 +2,54 @@
 
 TEM image-analysis co-scientist for a biology lab. Automates particle measurement (gold NPs, virus capsids, capsomeres) from Gatan `.dm3`/`.dm4` images, with results trustworthy enough to replace or augment hand measurement in ImageJ.
 
+The whole stack works equally well via plain CLI (a scientist running scripts directly) and via Claude / Codex (an agent driving the same scripts conversationally). Claude is a convenience, never a dependency.
+
 ## What's here
 
 | | |
 |---|---|
-| `vlp_measure_v2.py` | VLP gold + capsid measurement. BMV-style radial-profile wall fit, quality-based reliability, mag-invariant smoothing. **Primary VLP script.** |
-| `vlp_measure.py` | Original VLP script (population-clip reliability). Kept for comparison; v2 is the one to use. |
-| `bmv_measure.py` | BMV / BOG capsid measurement (no gold anchor). Hough detection + WALL_DESCENT_FRAC wall fit. |
-| `plot_vlp_scatter.py` | Combined scatter / 2D-hist / KDE / pooled hist across multiple VLP samples. |
-| `plot_capsid_groups.py` | Per-image strip plot showing gold + capsid medians side-by-side. |
+| `analysis/vlp_measure_v2.py` | VLP gold + capsid measurement. BMV-style radial-profile wall fit, quality-based reliability, mag-invariant smoothing. **Primary VLP script.** |
+| `analysis/vlp_measure.py` | Original VLP script (population-clip reliability). Kept for comparison; v2 is the one to use. |
+| `analysis/bmv_measure.py` | BMV / BOG capsid measurement (no gold anchor). Hough detection + WALL_DESCENT_FRAC wall fit. |
+| `analysis/plot_vlp_scatter.py` | Combined scatter / 2D-hist / KDE / pooled hist across multiple VLP samples. |
+| `analysis/plot_capsid_groups.py` | Per-image strip plot showing gold + capsid medians side-by-side. |
 | `LAB_NOTEBOOK.md` | Decision log: every non-trivial measurement decision, with dates and reasons. Read this first when revisiting. |
-| `CLAUDE.md` | Co-scientist working principles (decompose, anchor on easiest feature, generate overlays, surface anomalies). |
-| `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. Documents the tool surface, file conventions, and standard scientist workflows. |
+| `CLAUDE.md` | Co-scientist working principles + the auto-bootstrap rule any agent should follow. |
+| `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. Tool surface, file conventions, scientist workflows. |
+| `bootstrap.sh` | One-shot installer for new scientist repos. |
 | `benchmarks/` | *(planned)* Gold-standard runs and hand measurements per sample type. Curated manually. |
-| `incoming/` | *(convention)* DM3 dump location for new sample batches. Each batch in its own dated subfolder. |
+| `incoming/` | *(convention)* DM3 dump location for new sample batches. |
 | `results/` | Per-run outputs: CSVs, overlays, plots, `SUMMARY.md`. |
 
-## How to run a measurement
+## Installing the stack into a new lab repo
 
-Programmatic (preferred when an agent is driving):
+For a scientist setting up TEM analysis in a fresh directory:
+
+```bash
+cd ~/my-tem-project
+curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh | sh
+```
+
+This:
+1. Clones labflow-ai into a hidden `.labflow/` cache (gitignored)
+2. Symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory
+3. Copies `CLAUDE.md` (so the scientist can edit it locally)
+4. Pins the install to the current upstream SHA in `.labflow/INSTALLED_SHA`
+
+After that, the scientist can drop DM3s into `incoming/<batch>/` and either:
+- **Talk to Claude / Codex:** "analyze the new images" — the lab-pipeline skill takes over
+- **Run scripts directly from terminal:** `uv run python -m analysis.vlp_measure_v2 incoming/<batch> --workers 6`
+
+Both paths produce the same outputs: CSV, overlays, plots, `SUMMARY.md`.
+
+To update later: `cd .labflow && git pull && cd .. && .labflow/bootstrap.sh --relink` (or just re-run the curl one-liner — it's idempotent).
+
+## Running a measurement (programmatic vs CLI)
+
+**Programmatic — preferred when an agent is driving:**
 
 ```python
-from vlp_measure_v2 import run
+from analysis.vlp_measure_v2 import run
 
 result = run(
     image_path="incoming/2026-05-15_VLP17_batch4",
@@ -34,52 +60,65 @@ result = run(
 print(result["summary"])  # n_reliable, gold/capsid mean ± std, drop rate, …
 ```
 
-CLI (preferred when a human is driving):
+**CLI — preferred when a human is driving:**
 
 ```bash
-uv run python vlp_measure_v2.py "incoming/2026-05-15_VLP17_batch4" \
+uv run python -m analysis.vlp_measure_v2 "incoming/2026-05-15_VLP17_batch4" \
     --sample-type VLP --out results/vlp17_batch4 --workers 6
 ```
 
-Both paths produce the same outputs: `vlp_measurements.csv`, `overlays/*.png`, histograms, scatter, and a `SUMMARY.md` with the headline numbers + per-image table.
+Both produce, inside the directory passed as `out_dir` (or `--out`):
 
-## Data model (current)
+```
+results/<batch_name>/
+├── SUMMARY.md            # headline + per-image table — read this first
+├── vlp_measurements.csv  # one row per detected gold NP, with per-particle metrics
+├── vlp_histograms.png    # gold + capsid distributions
+├── vlp_scatter.png       # gold-vs-capsid scatter
+└── overlays/
+    ├── VLP17_0001_overlay.png
+    └── …                 # one per input image, raw on left, detections on right
+```
 
-- `incoming/<date>_<sample>_batch<N>/` — DM3/DM4 dump, optional `sample.txt` describing sample type.
-- `results/<run_name>/` — measurement outputs from one `run()`. Includes `SUMMARY.md` for the headline.
+All paths in the dict returned by `run()` are absolute and point inside `out_dir`. By convention, mirror the incoming folder name: `incoming/foo_batch/` → `out_dir=results/foo_batch/`. `out_dir` is created if it doesn't exist.
+
+## Data model
+
+- `incoming/<batch_name>/` — DM3/DM4 dump, one folder per imaging session/grid.
+- `results/<batch_name>/` — measurement outputs. Mirrors the incoming folder name 1:1.
 - `LAB_NOTEBOOK.md` — append-only log of substantive decisions.
 
 Planned (designed in `LAB_NOTEBOOK.md`, not yet implemented):
 
 - `benchmarks/<sample_type>/gold_standard.csv` — curated approved runs (manual gate).
 - `benchmarks/<sample_type>/hand_measurements.csv` — per-particle hand data, joined to runs by `batch_id`.
-- `eval.py` — script-vs-gold-script + script-vs-hand comparison engine.
-- `approve.py` — manual gate for promoting a run into the gold-standard set.
-- `validate_script.py` — re-run on the gold standard after a script change to catch regressions.
+- `analysis/eval.py` — script-vs-gold-script + script-vs-hand comparison engine.
+- `analysis/approve.py` — manual gate for promoting a run into the gold-standard set.
+- `analysis/validate_script.py` — re-run on the gold standard after a script change to catch regressions.
 
 ## Working principles
 
-See `CLAUDE.md` for the full list. The non-negotiables:
+See `CLAUDE.md` for the full list. Non-negotiables:
 
-1. **Always look at the actual image first** before picking a detector or diagnosing a bad result. Most mistakes come from theorising over CSV stats instead of opening the overlay.
+1. **Always look at the actual image first** before picking a detector or diagnosing a bad result.
 2. **Generate overlay PNGs for every run** — numbers alone cannot validate a pipeline.
 3. **Auto-threshold per image.** CLAHE and staining variation mean fixed cutoffs misbehave.
-4. **Declare physical scales in nm**, convert to pixels per-image. Pixel-only constants cause magnification-dependent bias.
-5. **Surface anomalies** — 100% detection rates, step changes, outliers in range. Print and flag, don't silently accept.
+4. **Declare physical scales in nm**, convert to pixels per-image.
+5. **Surface anomalies** — 100% detection rates, step changes, outliers. Print and flag.
 
 ## Sample types
 
 | Sample | Anchors on | Script |
 |---|---|---|
-| VLPs (gold-NP-cored) — VLP17, VLP20, VLP_100 | Gold NP (near-black, circular) | `vlp_measure_v2.py` |
-| Bare gold NPs | Gold NP | `vlp_measure_v2.py` (gold path only) |
-| BMV / BOG (no gold) | Bright protein ring, dark stain pool | `bmv_measure.py` |
+| VLPs (gold-NP-cored) — VLP17, VLP20, VLP_100 | Gold NP (near-black, circular) | `analysis/vlp_measure_v2.py` |
+| Bare gold NPs | Gold NP | `analysis/vlp_measure_v2.py` (gold path only) |
+| BMV / BOG (no gold) | Bright protein ring, dark stain pool | `analysis/bmv_measure.py` |
 
-Sample classification from a raw image is **not yet automated** — the scientist supplies it (via `sample.txt` or as a `run()` argument).
+Sample classification from a raw image is **not yet automated** — the scientist supplies it.
 
-## Setup
+## Setup (development on this repo itself)
 
 ```bash
-uv sync           # install dependencies
-uv run python vlp_measure_v2.py --help
+uv sync                                                   # install dependencies
+uv run python -m analysis.vlp_measure_v2 --help          # verify install
 ```

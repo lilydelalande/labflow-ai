@@ -40,7 +40,7 @@ from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.spatial import cKDTree
 
 # Reuse the well-tested image loading + gold detection from v1
-from vlp_measure import (
+from analysis.vlp_measure import (
     load_dm,
     normalise,
     detect_gold,
