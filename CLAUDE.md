@@ -6,36 +6,37 @@ The analysis stack (scripts + skill + benchmarks) is distributed via the `labflo
 
 ## Bootstrap rule (first user interaction in a fresh repo)
 
-On the **first turn of any session** in this repo, before doing anything else, silently check whether the lab-pipeline skill is installed:
+On the **first turn of any session** in this repo, before doing anything else, follow this sequence:
+
+**1. Greet and announce the check** (one sentence, conversational, no jargon):
+
+> "Hi! Quick check first — making sure the lab's analysis tools are set up in this folder."
+
+**2. Run the check:**
 
 ```bash
 test -f .claude/skills/lab-pipeline/SKILL.md && echo INSTALLED || echo MISSING
 ```
 
-**If INSTALLED:** do nothing. The stack is ready. Proceed with whatever the scientist asked. Don't re-run bootstrap on every turn; one check per session is enough.
+**3a. If INSTALLED:** confirm briefly and ask what they want to do:
 
-**If MISSING:** do not silently fetch from the internet. Instead, **explain first, then ask for consent**, in roughly this shape (paraphrase, don't read verbatim):
+> "All set. What would you like to analyze?"
 
-> "Hi! This looks like a fresh repo for TEM image analysis using the **labflow-ai** stack — I can tell because of this CLAUDE.md file. The shared analysis scripts, gold-standard benchmark data, and the workflow skill aren't installed in this directory yet.
->
-> To set them up I'd run a one-shot bootstrap script from the lab's GitHub repo. Specifically:
->
-> ```bash
-> bash <(curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh)
-> ```
->
-> What that does:
-> - Clones github.com/lily-de/labflow-ai into a hidden `.labflow/` cache folder
-> - Symlinks the scripts (`analysis/`), benchmark data (`benchmarks/`), and the lab-pipeline workflow skill into this directory
-> - Copies `CLAUDE.md` (so you can edit it locally without affecting upstream)
-> - Adds `.labflow/`, `incoming/`, `results/` to `.gitignore`
-> - Creates empty `incoming/` and `results/` folders for your DM3 dumps and outputs
->
-> It's idempotent and reversible (just delete the symlinks and `.labflow/`). After it finishes, drop DM3s into `incoming/<batch_name>/` and ask me to analyze them. **Want me to run it?**"
+Then proceed normally. Don't re-run the check on subsequent turns; one per session is enough.
 
-Then **wait for the scientist to confirm** ("yes", "go ahead", "sure") before invoking the curl. When you do invoke it, the user will see Claude Code's permission prompt for the bash command — that's a second, intentional consent step. Don't try to suppress it.
+**3b. If MISSING:** ask permission to install, briefly:
 
-If the scientist declines or asks questions, answer them. Don't bootstrap until they've agreed.
+> "Looks like the tools aren't installed yet — should take a few seconds. Want me to set them up?"
+
+If they say yes, run the bootstrap and proceed. If they ask what it does, answer plainly: it pulls scripts and benchmark data from the lab's GitHub repo, sets up `incoming/` and `results/` folders, takes about 5 seconds, can be removed by deleting `.labflow/`. Avoid terms like "idempotent", "symlinks", "clone" unless the scientist is technical and asks. If they decline or ask other questions, answer them and don't bootstrap until they've agreed.
+
+The bootstrap command:
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh)
+```
+
+When you invoke it, the user sees Claude Code's permission prompt — that's a second consent step. Don't try to suppress it.
 
 If the scientist explicitly says "update labflow" or "pull latest" later, re-run the same bootstrap command — it's idempotent and updates the cached clone in place. You don't need to re-explain in that case; they already know what's happening.
 
