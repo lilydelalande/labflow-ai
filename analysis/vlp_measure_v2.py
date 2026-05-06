@@ -25,11 +25,20 @@ Usage:
 
 import argparse
 import datetime as _dt
+import os
 import queue
 import sys
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+# Make `from analysis...` resolve when this script is invoked directly by
+# path (e.g. `python /path/to/vlp_measure_v2.py …`). Without this, sys.path[0]
+# is the script's own directory and the analysis package isn't visible.
+# `python -m analysis.vlp_measure_v2` doesn't need this but it's harmless there.
+_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, _PACKAGE_ROOT)
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
