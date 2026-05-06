@@ -40,16 +40,21 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESULTS   = REPO_ROOT / "results"
 BENCH_VLP = REPO_ROOT / "benchmarks" / "vlp"
+BENCH_BMV = REPO_ROOT / "benchmarks" / "bmv"
 
-SCRIPT_VERSION = "vlp_measure_v2@2.0(wall=0.75;contrast=0.05;cv=0.2;prom=0.15;smooth=0.7;end=25.0)"
+SCRIPT_VERSION_VLP = "vlp_measure_v2@2.0(wall=0.75;contrast=0.05;cv=0.2;prom=0.15;smooth=0.7;end=25.0)"
+SCRIPT_VERSION_BMV = "bmv_measure@1.0"
 
 
 # ── Reference runs (per-image script outputs we trust) ────────────────────
 
 def _per_image_summary(csv_path: Path, sample_name: str,
-                       approver: str, notes: str) -> pd.DataFrame:
-    """Aggregate a vlp_measurements.csv into one row per image."""
+                       approver: str, notes: str,
+                       script_version: str = SCRIPT_VERSION_VLP) -> pd.DataFrame:
+    """Aggregate a measurements CSV into one row per image. Works for both VLP
+    (gold + capsid) and BMV (capsid only — gold columns will be NaN)."""
     df = pd.read_csv(csv_path)
+    has_gold = "gold_diameter_nm" in df.columns
     rows = []
     for fname, sub in df.groupby("file", sort=True):
         rel = sub[sub["is_reliable"]]
@@ -60,16 +65,16 @@ def _per_image_summary(csv_path: Path, sample_name: str,
         rows.append({
             "sample_name":            sample_name,
             "filename":               str(fname),
-            "script_version":         SCRIPT_VERSION,
+            "script_version":         script_version,
             "n_gold":                 n_gold,
             "n_wall_fit":             n_wall,
             "n_reliable":             n_rel,
             "wall_fit_success_rate":  (n_wall / n_gold) if n_gold else np.nan,
             "reliable_rate":          (n_rel  / n_gold) if n_gold else np.nan,
             "drop_rate":              ((n_gold - n_rel) / n_gold) if n_gold else np.nan,
-            "gold_mean_nm":           float(rel["gold_diameter_nm"].mean())   if n_rel else np.nan,
-            "gold_std_nm":            float(rel["gold_diameter_nm"].std())    if n_rel >= 2 else np.nan,
-            "gold_median_nm":         float(rel["gold_diameter_nm"].median()) if n_rel else np.nan,
+            "gold_mean_nm":           float(rel["gold_diameter_nm"].mean())   if (has_gold and n_rel) else np.nan,
+            "gold_std_nm":            float(rel["gold_diameter_nm"].std())    if (has_gold and n_rel >= 2) else np.nan,
+            "gold_median_nm":         float(rel["gold_diameter_nm"].median()) if (has_gold and n_rel) else np.nan,
             "capsid_mean_nm":         float(rel["capsid_diameter_nm"].mean())   if n_rel else np.nan,
             "capsid_std_nm":          float(rel["capsid_diameter_nm"].std())    if n_rel >= 2 else np.nan,
             "capsid_median_nm":       float(rel["capsid_diameter_nm"].median()) if n_rel else np.nan,
@@ -125,12 +130,41 @@ def _parse_paired_hand(csv_path: Path, length_unit: str, sample_name: str,
     return pd.DataFrame(rows)
 
 
+def _parse_single_hand(csv_path: Path, sample_name: str,
+                       scientist: str, measure_date: str,
+                       notes: str = "") -> pd.DataFrame:
+    """Single-column ImageJ CSV (one capsid measurement per row, no gold).
+    Per-row unit detection — values < 1.0 are µm, otherwise nm. Handles
+    mixed-unit exports where the image scale changed mid-measurement."""
+    raw = pd.read_csv(csv_path)
+    if "Length" not in raw.columns:
+        raise ValueError(f"{csv_path} has no 'Length' column")
+    lengths = raw["Length"].to_numpy(dtype=float)
+    lengths_nm = np.where(lengths < 1.0, lengths * 1000.0, lengths)
+
+    rows = []
+    for i, L in enumerate(lengths_nm, start=1):
+        rows.append({
+            "sample_name":             sample_name,
+            "particle_idx":            i,
+            "hand_gold_diameter_nm":   np.nan,   # no gold in single-column hand
+            "hand_capsid_diameter_nm": float(L),
+            "scientist":               scientist,
+            "measure_date":            measure_date,
+            "source_file":             _safe_relpath(csv_path),
+            "notes":                   notes,
+        })
+    return pd.DataFrame(rows)
+
+
 # ── Main seed routine ──────────────────────────────────────────────────────
 
 def main() -> None:
     BENCH_VLP.mkdir(parents=True, exist_ok=True)
+    BENCH_BMV.mkdir(parents=True, exist_ok=True)
 
-    runs = pd.concat([
+    # ── VLP ─────────────────────────────────────────────────────────────────
+    vlp_runs = pd.concat([
         _per_image_summary(
             csv_path    = RESULTS / "vlp17_v2"  / "vlp_measurements.csv",
             sample_name = "VLP17_v2_initial",
@@ -151,11 +185,11 @@ def main() -> None:
         ),
     ], ignore_index=True)
 
-    runs_path = BENCH_VLP / "reference_runs.csv"
-    runs.to_csv(runs_path, index=False)
-    print(f"reference_runs.csv → {runs_path}  ({len(runs)} rows)")
+    vlp_runs_path = BENCH_VLP / "reference_runs.csv"
+    vlp_runs.to_csv(vlp_runs_path, index=False)
+    print(f"VLP reference_runs.csv → {vlp_runs_path}  ({len(vlp_runs)} rows)")
 
-    hand = pd.concat([
+    vlp_hand = pd.concat([
         _parse_paired_hand(
             csv_path     = RESULTS / "vlp17"  / "VLP_17_hand_measurements.csv",
             length_unit  = "um",
@@ -174,23 +208,62 @@ def main() -> None:
         ),
     ], ignore_index=True)
 
-    hand_path = BENCH_VLP / "reference_hand.csv"
-    hand.to_csv(hand_path, index=False)
-    print(f"reference_hand.csv → {hand_path}  ({len(hand)} rows)")
+    vlp_hand_path = BENCH_VLP / "reference_hand.csv"
+    vlp_hand.to_csv(vlp_hand_path, index=False)
+    print(f"VLP reference_hand.csv → {vlp_hand_path}  ({len(vlp_hand)} rows)")
 
-    print("\n── seeded reference_runs.csv ──")
-    print(runs.groupby("sample_name").agg(
+    # ── BMV ─────────────────────────────────────────────────────────────────
+    bmv_runs = _per_image_summary(
+        csv_path       = RESULTS / "bmv" / "bmv_measurements.csv",
+        sample_name    = "BMV_initial",
+        approver       = "Lily",
+        notes          = "Initial bmv_measure run; capsid mean ~28.6 nm matches literature.",
+        script_version = SCRIPT_VERSION_BMV,
+    )
+    bmv_runs_path = BENCH_BMV / "reference_runs.csv"
+    bmv_runs.to_csv(bmv_runs_path, index=False)
+    print(f"BMV reference_runs.csv → {bmv_runs_path}  ({len(bmv_runs)} rows)")
+
+    bmv_hand_csv = RESULTS / "bmv" / "hand" / "bmv_hand_measurements.csv"
+    if bmv_hand_csv.exists():
+        bmv_hand = _parse_single_hand(
+            csv_path     = bmv_hand_csv,
+            sample_name  = "BMV_initial",
+            scientist    = "Lily",
+            measure_date = "2026-05-06",
+            notes        = "Aggregate BMV hand measurements (capsid only — no gold). Mixed nm/µm units in source; per-row unit detection handles it.",
+        )
+        bmv_hand_path = BENCH_BMV / "reference_hand.csv"
+        bmv_hand.to_csv(bmv_hand_path, index=False)
+        print(f"BMV reference_hand.csv → {bmv_hand_path}  ({len(bmv_hand)} rows)")
+
+    print("\n── seeded VLP reference_runs.csv ──")
+    print(vlp_runs.groupby("sample_name").agg(
         n_images=("filename", "count"),
         capsid_mean_nm=("capsid_mean_nm", "mean"),
         reliable_rate=("reliable_rate", "mean"),
     ).round(3).to_string())
 
-    print("\n── seeded reference_hand.csv ──")
-    print(hand.groupby("sample_name").agg(
+    print("\n── seeded VLP reference_hand.csv ──")
+    print(vlp_hand.groupby("sample_name").agg(
         n_particles=("particle_idx", "count"),
         gold_mean_nm=("hand_gold_diameter_nm", "mean"),
         capsid_mean_nm=("hand_capsid_diameter_nm", "mean"),
     ).round(2).to_string())
+
+    print("\n── seeded BMV reference_runs.csv ──")
+    print(bmv_runs.groupby("sample_name").agg(
+        n_images=("filename", "count"),
+        capsid_mean_nm=("capsid_mean_nm", "mean"),
+        reliable_rate=("reliable_rate", "mean"),
+    ).round(3).to_string())
+    if bmv_hand_csv.exists():
+        print("\n── seeded BMV reference_hand.csv ──")
+        print(bmv_hand.groupby("sample_name").agg(
+            n_particles=("particle_idx", "count"),
+            capsid_mean_nm=("hand_capsid_diameter_nm", "mean"),
+            capsid_std_nm=("hand_capsid_diameter_nm", "std"),
+        ).round(2).to_string())
 
 
 if __name__ == "__main__":

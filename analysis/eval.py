@@ -70,27 +70,43 @@ def _load_reference_runs(sample_type: str, benchmarks_dir: Path) -> pd.DataFrame
 
 # ── Per-image quality check ─────────────────────────────────────────────
 
-# Size-invariant quality metrics. These describe HOW WELL we measured —
-# regardless of absolute particle size. Adding metrics here means they get
-# checked against the reference distribution; absolute-size metrics like
-# capsid_median_nm or gold_mean_nm intentionally NOT here.
-_QUALITY_METRICS = [
-    "wall_fit_success_rate",
-    "reliable_rate",
-    "drop_rate",
-    "median_wall_cv",
-    "iqr_wall_cv",
-]
+# Quality metrics gated against the reference distribution. Two flavors:
+#
+#   - Size-invariant (always gated): rates and CVs that describe HOW WELL we
+#     measured, regardless of absolute particle size.
+#   - Absolute-size (gated only for sample types where we have a known target):
+#     capsid_mean_nm. For VLP, the absolute capsid size varies sample-by-sample
+#     (VLP17, VLP20, VLP_100 are different particles + sample names are
+#     intent rather than measurement) so we don't gate on it. For BMV, every
+#     "BMV" prep is the same well-characterized virus (~28 nm in literature),
+#     so absolute-size drift IS a real signal worth flagging.
+_QUALITY_METRICS_BY_TYPE = {
+    "VLP": [
+        "wall_fit_success_rate",
+        "reliable_rate",
+        "drop_rate",
+        "median_wall_cv",
+        "iqr_wall_cv",
+    ],
+    "BMV": [
+        "wall_fit_success_rate",
+        "reliable_rate",
+        "drop_rate",
+        "median_wall_cv",
+        "iqr_wall_cv",
+        "capsid_mean_nm",   # BMV is a single virus species — abs size IS comparable
+    ],
+}
 
 _METRIC_DEFINITIONS = {
     "wall_fit_success_rate":
-        "Fraction of detected gold particles for which the script found a clean "
+        "Fraction of detected particles for which the script found a clean "
         "capsid wall. Low = the protein ring isn't clear enough in this image "
         "(stain too thin, contrast too low, or focus issues).",
     "reliable_rate":
-        "Fraction of detected gold particles whose capsid measurement passed "
-        "all quality filters (good wall fit + circular wall). Low = many "
-        "particles look problematic to the algorithm.",
+        "Fraction of detected particles whose capsid measurement passed all "
+        "quality filters (good wall fit + circular wall). Low = many particles "
+        "look problematic to the algorithm.",
     "drop_rate":
         "1 − reliable_rate. Fraction excluded from the final mean.",
     "median_wall_cv":
@@ -101,6 +117,11 @@ _METRIC_DEFINITIONS = {
     "iqr_wall_cv":
         "Spread of wall_cv across particles in this image. High IQR = some "
         "particles fit cleanly, others don't — often uneven staining.",
+    "capsid_mean_nm":
+        "Mean capsid diameter in nm across all reliable particles in this "
+        "image. Gated only for BMV (where every prep is the same biological "
+        "entity and drift in absolute size is a real signal). Not gated for "
+        "VLP — different VLP samples have different sizes by design.",
 }
 
 
@@ -133,12 +154,14 @@ def _flag_metric(value: float, ref: pd.Series, name: str) -> Optional[dict]:
     }
 
 
-def _per_image_quality_check(per_image: list[dict], reference_runs: pd.DataFrame) -> list[dict]:
-    """For each image, compare each size-invariant metric against the pooled reference."""
+def _per_image_quality_check(per_image: list[dict], reference_runs: pd.DataFrame,
+                              sample_type: str) -> list[dict]:
+    """For each image, compare each gated metric against the pooled reference."""
+    metrics = _QUALITY_METRICS_BY_TYPE.get(sample_type, _QUALITY_METRICS_BY_TYPE["VLP"])
     rows: list[dict] = []
     for img in per_image:
         flags = []
-        for metric in _QUALITY_METRICS:
+        for metric in metrics:
             if metric not in img or metric not in reference_runs.columns:
                 continue
             f = _flag_metric(img[metric], reference_runs[metric], metric)
@@ -155,18 +178,44 @@ def _per_image_quality_check(per_image: list[dict], reference_runs: pd.DataFrame
 
 # ── Hand vs script (filesystem-paired) ───────────────────────────────────
 
+def _looks_paired(lengths_nm: np.ndarray) -> bool:
+    """
+    Decide whether a Length array is in paired (gold,capsid) format vs
+    single-column. Paired data has the two streams at distinctly different
+    sizes — gold ~12-22 nm, capsid ~28-40 nm for VLPs. Single-column data
+    (BMV capsids only) has both streams drawn from the same distribution.
+
+    Test: is the median of even-indexed values meaningfully smaller than
+    odd-indexed values? If their medians overlap (within 20% of each other),
+    it's not paired.
+    """
+    if len(lengths_nm) % 2 != 0 or len(lengths_nm) < 4:
+        return False
+    a = lengths_nm[0::2]   # candidate gold (smaller)
+    b = lengths_nm[1::2]   # candidate capsid (larger)
+    med_a, med_b = float(np.median(a)), float(np.median(b))
+    if med_a == 0 or med_b == 0:
+        return False
+    # paired iff capsid is ≥30% larger than gold (matches all VLP data we have)
+    return (med_b / med_a) >= 1.30
+
+
 def _read_hand_csvs(run_dir: Path) -> Optional[pd.DataFrame]:
     """
-    Read any *.csv files under `<run_dir>/hand/`. Each CSV is the ImageJ
-    output for some subset of particles in this run. Concatenate.
+    Read any *.csv files under `<run_dir>/hand/`. Each CSV is an ImageJ
+    export of particle measurements for this run. Concatenate.
 
-    Returns a DataFrame with at least `hand_capsid_diameter_nm` (per-particle),
-    or None if no hand directory or no CSVs.
+    Two formats supported:
+      - Paired (VLP convention): rows alternate gold (odd) / capsid (even).
+        2N rows = N particles. Detected by gold/capsid size separation.
+      - Single-column (BMV convention): one capsid measurement per row.
+        Used when there's no gold to pair against.
 
-    The CSV format is whatever the scientist exported from ImageJ; we expect
-    a `Length` column. Length unit (µm vs nm) is inferred from the magnitude:
-    if max < 1.0 we treat as µm and convert; otherwise nm. Every existing
-    hand CSV in this repo follows that convention.
+    Length unit (µm vs nm) is inferred from magnitude (max < 1.0 → µm).
+
+    Returns DataFrame with `hand_capsid_diameter_nm` always populated, plus
+    `hand_gold_diameter_nm` (NaN for single-column rows). Or None if no hand/
+    directory or no usable CSVs.
     """
     hand_dir = run_dir / "hand"
     if not hand_dir.is_dir():
@@ -183,20 +232,19 @@ def _read_hand_csvs(run_dir: Path) -> Optional[pd.DataFrame]:
         lengths = df["Length"].to_numpy(dtype=float)
         if lengths.size == 0:
             continue
-        unit = "um" if np.nanmax(lengths) < 1.0 else "nm"
-        lengths_nm = lengths * 1000.0 if unit == "um" else lengths
-        # Heuristic: even-row-count CSVs with Length variation across pairs are
-        # most likely paired (gold, capsid) — same convention as seed data.
-        # We treat odd-indexed rows (0-indexed: rows 1, 3, 5, …) as capsid.
-        # Single-column hand CSVs (capsid only) get all rows used.
-        if len(lengths_nm) % 2 == 0 and len(lengths_nm) >= 4:
+        # Per-row unit detection: any value < 1.0 is µm (no real particle is sub-nm),
+        # others are already in nm. This handles mixed-unit ImageJ exports cleanly.
+        lengths_nm = np.where(lengths < 1.0, lengths * 1000.0, lengths)
+
+        if _looks_paired(lengths_nm):
             golds   = lengths_nm[0::2]
             capsids = lengths_nm[1::2]
-            paired = True
+            paired  = True
         else:
-            golds   = np.full_like(lengths_nm, np.nan)
+            golds   = np.full(len(lengths_nm), np.nan)
             capsids = lengths_nm
-            paired = False
+            paired  = False
+
         for i, (g, c) in enumerate(zip(golds, capsids), start=1):
             rows.append({
                 "source_file":             csv_path.name,
@@ -313,11 +361,17 @@ def _render_report(result: dict) -> str:
         "",
         _INTRO,
     ]
-    for metric, definition in _METRIC_DEFINITIONS.items():
-        md.append(f"> - **`{metric}`** — {definition}")
+    gated_metrics = _QUALITY_METRICS_BY_TYPE.get(s["sample_type"], [])
+    for metric in gated_metrics:
+        if metric in _METRIC_DEFINITIONS:
+            md.append(f"> - **`{metric}`** — {_METRIC_DEFINITIONS[metric]}")
     md.append(">")
-    md.append("> Absolute sizes (`capsid_mean_nm`, `gold_mean_nm`, etc.) are reported but "
-              "**not gated**.")
+    if "capsid_mean_nm" in gated_metrics:
+        md.append("> Absolute capsid size **is** gated for this sample type "
+                  "(BMV is a single well-characterised virus species).")
+    else:
+        md.append("> Absolute sizes (`capsid_mean_nm`, `gold_mean_nm`, etc.) are reported but "
+                  "**not gated** — different samples have different sizes by design.")
 
     md += [
         "",
@@ -327,12 +381,15 @@ def _render_report(result: dict) -> str:
     ]
     sm = s.get("script_summary", {})
     if sm:
+        gold_part = ""
+        if not np.isnan(sm.get("gold_mean_nm", float("nan"))):
+            gold_part = (f"gold {sm['gold_mean_nm']:.2f} ± {sm.get('gold_std_nm', float('nan')):.2f} nm, ")
+        capsid_gated = "capsid_mean_nm" in _QUALITY_METRICS_BY_TYPE.get(s["sample_type"], [])
+        gated_note = "(reported and gated)" if capsid_gated else "(reported, not judged)"
         md.append(
-            f"- This run measured: gold {sm.get('gold_mean_nm', float('nan')):.2f} ± "
-            f"{sm.get('gold_std_nm', float('nan')):.2f} nm, capsid "
+            f"- This run measured: {gold_part}capsid "
             f"{sm.get('capsid_mean_nm', float('nan')):.2f} ± "
-            f"{sm.get('capsid_std_nm', float('nan')):.2f} nm "
-            f"(reported, not judged)"
+            f"{sm.get('capsid_std_nm', float('nan')):.2f} nm {gated_note}"
         )
     if s["hand_vs_script"] is None:
         md.append("- Hand vs script: no hand CSVs in this run's `hand/` folder")
@@ -411,7 +468,7 @@ def evaluate(
     run_data       = _coerce_run_input(run)
     runs_ref       = _load_reference_runs(sample_type, benchmarks_dir)
 
-    per_image_quality = _per_image_quality_check(run_data["per_image"], runs_ref)
+    per_image_quality = _per_image_quality_check(run_data["per_image"], runs_ref, sample_type)
     hand_vs_script    = _hand_vs_script_check(run_data)
     n_warns_total     = sum(r["n_warns"] for r in per_image_quality)
 

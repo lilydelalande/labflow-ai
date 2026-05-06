@@ -1,8 +1,8 @@
-# Eval — vlp17_v2
+# Eval — bmv
 
-- **Sample type:** VLP
-- **Script:** `vlp_measure_v2@2.0(wall=0.75;contrast=0.05;cv=0.2;prom=0.15;smooth=0.7;end=25.0)`
-- **Reference:** `benchmarks/vlp/reference_runs.csv` (41 prior images)
+- **Sample type:** BMV
+- **Script:** `bmv_measure@1.0`
+- **Reference:** `benchmarks/bmv/reference_runs.csv` (11 prior images)
 
 > ## How to read this report
 >
@@ -32,23 +32,26 @@
 > - **`drop_rate`** — 1 − reliable_rate. Fraction excluded from the final mean.
 > - **`median_wall_cv`** — Per-particle, the script measures wall radius in 8 angular sectors and computes std/mean (= CV). 0 = perfect circle. The median CV across all particles in this image is reported. Higher = particles look non-circular (deformed walls, particle clustering, bad fits).
 > - **`iqr_wall_cv`** — Spread of wall_cv across particles in this image. High IQR = some particles fit cleanly, others don't — often uneven staining.
+> - **`capsid_mean_nm`** — Mean capsid diameter in nm across all reliable particles in this image. Gated only for BMV (where every prep is the same biological entity and drift in absolute size is a real signal). Not gated for VLP — different VLP samples have different sizes by design.
 >
-> Absolute sizes (`capsid_mean_nm`, `gold_mean_nm`, etc.) are reported but **not gated** — different samples have different sizes by design.
+> Absolute capsid size **is** gated for this sample type (BMV is a single well-characterised virus species).
 
 ## Headline
-- 17 images evaluated
-- **1 per-image quality warning(s)**
-- This run measured: gold 16.70 ± 1.39 nm, capsid 34.42 ± 1.85 nm (reported, not judged)
-- Hand vs script: no hand CSVs in this run's `hand/` folder
+- 11 images evaluated
+- **0 per-image quality warning(s)**
+- This run measured: capsid 28.59 ± 0.94 nm (reported and gated)
+- Hand vs script: Δ capsid **+0.61 nm** (hand n=336 from 1 CSV(s))
 
 ## Per-image quality check
 
-| filename | warnings |
-|---|---|
-| `VLP17_0004.dm4` | `iqr_wall_cv` = 0.146 (ref median 0.045, IQR 0.042; Δ +0.101) |
-
-_Reference distribution built from 41 prior images of this sample type._
+All images within reference range. ✓
 
 ## Hand vs script
 
-No hand-measurement CSVs found in `<run_dir>/hand/`. Drop one or more ImageJ CSVs there and re-run eval to see the script-vs-hand comparison.
+Read **336 particles** from 1 CSV(s): bmv_hand_measurements.csv
+
+| metric | hand | script | Δ (hand − script) |
+|---|---|---|---|
+| Capsid mean | 29.20 nm | 28.59 nm | **+0.61 nm** |
+
+_A persistent positive or negative delta across runs would suggest the script reads systematically larger or smaller than human ImageJ tracing — a calibration issue rather than a per-batch problem._

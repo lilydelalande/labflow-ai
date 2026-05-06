@@ -40,19 +40,52 @@ from pathlib import Path
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import ncempy.io as nio
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.spatial import cKDTree
-from skimage import filters
+from skimage import exposure, filters
 from skimage.transform import hough_circle, hough_circle_peaks
 
-from analysis.vlp_measure_v2 import (
-    load_dm,
-    normalise,
-    radial_profile,
-)
+
+# ── Shared utilities (image loading, normalisation, radial profile sampling) ──
+# Inlined here so this script is self-contained — drop just this file
+# alongside images and run it. Same definitions as in vlp_measure_v2.py.
+
+def load_dm(path: Path) -> tuple[np.ndarray, float]:
+    """Return (image as float32, nm_per_pixel) for a Gatan .dm3 / .dm4 file."""
+    d = nio.read(str(path))
+    img = d["data"].astype(np.float32)
+    nm_per_px = float(d["pixelSize"][0])
+    return img, nm_per_px
+
+
+def normalise(img: np.ndarray) -> np.ndarray:
+    """Percentile-stretch to [0,1] then CLAHE for local contrast."""
+    lo, hi = np.percentile(img, [0.5, 99.5])
+    img = np.clip((img - lo) / (hi - lo), 0, 1)
+    return exposure.equalize_adapthist(img, clip_limit=0.02)
+
+
+def radial_profile(
+    img: np.ndarray,
+    cy: float,
+    cx: float,
+    r_start: int,
+    r_end: int,
+    n_angles: int = 360,
+) -> np.ndarray:
+    """Mean intensity at each integer radius from r_start to r_end (px) around (cy, cx)."""
+    h, w = img.shape
+    angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
+    profile = np.zeros(r_end - r_start)
+    for i, r in enumerate(range(r_start, r_end)):
+        ys = np.clip((cy + r * np.sin(angles)).astype(int), 0, h - 1)
+        xs = np.clip((cx + r * np.cos(angles)).astype(int), 0, w - 1)
+        profile[i] = img[ys, xs].mean()
+    return profile
 
 
 # ── Tuning constants ─────────────────────────────────────────────────────────
@@ -829,6 +862,36 @@ def main() -> None:
         print(f"  std     {reliable.std():.1f} nm")
         print(f"  median  {reliable.median():.1f} nm")
         print(f"  range   {reliable.min():.1f} – {reliable.max():.1f} nm")
+
+    # Auto-eval against benchmarks/bmv/ (if available). Wrapped in try/except
+    # so this script remains usable as a single-file standalone — drop alone
+    # next to images and it still measures.
+    try:
+        from analysis.eval import evaluate  # noqa: WPS433
+        # Build a minimal run-result dict from the CSV we just wrote.
+        from analysis.vlp_measure_v2 import (  # noqa: WPS433
+            _per_image_summary, _overall_summary, _script_version_with_tunables,
+        )
+        run_result = {
+            "sample_type":    "BMV",
+            "sample_name":    args.out.name,
+            "script_version": "bmv_measure@1.0",
+            "summary":        _overall_summary(results),
+            "per_image":      _per_image_summary(results),
+            "outputs":        {"run_dir": str(args.out),
+                               "summary_md": str(args.out / "SUMMARY.md")},
+        }
+        ev = evaluate(run_result, sample_type="BMV", write_report=True)
+        print(f"\n  Eval → {ev.get('report_path', '(no report)')}")
+        print(f"        warnings: {ev['n_warns_total']} across {ev['n_images']} image(s)")
+        if ev["hand_vs_script"]:
+            H = ev["hand_vs_script"]
+            print(f"        hand vs script: Δ capsid {H['delta_capsid_nm']:+.2f} nm "
+                  f"(hand n={H['n_hand_particles']})")
+    except (ImportError, FileNotFoundError):
+        pass  # standalone use, or no benchmarks/bmv/ seeded yet
+    except Exception as exc:  # pragma: no cover (defensive)
+        print(f"  (eval skipped: {exc})", file=sys.stderr)
 
 
 if __name__ == "__main__":
