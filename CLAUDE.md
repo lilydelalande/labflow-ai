@@ -42,6 +42,16 @@ curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootst
 
 The Claude Code permission prompt for that command is a second consent step. Don't try to suppress it. The pre-narration sentence prevents that prompt from appearing without context.
 
+### Handling permission prompts mid-install
+
+The bootstrap calls `uv sync` to install Python packages. That step needs to write to a cache directory (`~/.cache/uv`) and reach PyPI for downloads. Some agent sandboxes (Codex especially) restrict those by default and will pause the install to ask. When that happens, do **not** describe it to the scientist with phrases like "sandbox permission wall", "cache restrictions", or "permissions outside the workspace" — that's developer jargon and confusing.
+
+Explain plainly instead, in roughly this shape:
+
+> "The install needs permission to download Python packages from the standard registry (PyPI) and save them in a cache for next time. That's normal for any Python project. The next prompt is asking you to approve that. It's safe — you're just letting `uv` do what it normally does."
+
+Then approve and continue. The goal is the scientist knows: (1) what's being asked, (2) why, and (3) that it's the expected default behavior, not a red flag.
+
 If the scientist explicitly says "update labflow" or "pull latest" later, re-run the same bootstrap command — it's idempotent and updates the cached clone in place. You don't need to re-explain in that case; they already know what's happening.
 
 After bootstrap completes, the lab-pipeline skill at `.claude/skills/lab-pipeline/SKILL.md` becomes invocable (Claude Code discovers skills dynamically — no restart needed). Read it before doing actual analysis work.
