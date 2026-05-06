@@ -112,6 +112,137 @@ results/<batch_name>/
 
 All paths in the dict returned by `run()` are absolute and point inside `out_dir`. By convention, mirror the incoming folder name: `incoming/foo_batch/` → `out_dir=results/foo_batch/`. `out_dir` is created if it doesn't exist.
 
+## CLI reference (all scripts, all flags)
+
+Every script in `analysis/` is invocable directly. Canonical form is `uv run python -m analysis.<name>` (works from any cwd as long as you're in a labflow-ai repo). Direct-path form `uv run python /path/to/analysis/<name>.py` also works for the measurement scripts.
+
+### Measurement scripts
+
+#### `analysis.vlp_measure_v2` — VLP gold + capsid measurement
+
+```bash
+uv run python -m analysis.vlp_measure_v2 <image_path> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `image_path` (positional) | required | A `.dm3`/`.dm4` file or a folder of them |
+| `--pattern` | `*` | Glob when `image_path` is a folder |
+| `--out` | `results/vlp_v2` | Output directory (`SUMMARY.md`, CSV, overlays, etc. land here) |
+| `--sample-type` | `VLP` | Sample type for routing eval — leave at default for VLPs |
+| `--sample-name` | folder name | Override the auto-derived sample name |
+| `--workers` | `4` | Parallel worker processes |
+| `--gold-threshold` | auto (Otsu) | Override the per-image gold-detection intensity cutoff |
+| `--min-gold-nm` | `7.0` | Lower size cutoff for gold detection |
+| `--max-gold-nm` | `30.0` | Upper size cutoff for gold detection |
+| `--show-flagged` | off | Also draw flagged-unreliable circles in the overlay (tomato) |
+| `--gui` | off | Pop a Tk progress window (closing it doesn't stop the run) |
+
+#### `analysis.bmv_measure` — BMV / BOG capsid measurement (no gold anchor)
+
+```bash
+uv run python -m analysis.bmv_measure <image_path> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `image_path` (positional) | required | A `.dm3`/`.dm4` file or a folder of them |
+| `--pattern` | `*` | Glob when `image_path` is a folder |
+| `--out` | `results/bmv` | Output directory |
+| `--expected-nm` | `28.0` | Expected capsid diameter in nm — Hough searches around this |
+| `--workers` | `4` | Parallel worker processes |
+| `--show-flagged` | off | Draw flagged (tomato) and no-fit (magenta) circles in overlay |
+| `--debug` | off | Save radial profile plots for a sample of particles |
+| `--debug-indices N1 N2 …` | random sample | Specific particle indices to plot in debug mode |
+| `--gui` | off | Pop a Tk progress window |
+
+### Eval
+
+#### `analysis.eval` — compare a run to the reference benchmarks
+
+```bash
+uv run python -m analysis.eval <run_dir> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `run_dir` (positional) | required | Directory with the measurement CSV (e.g. `results/<sample>`) |
+| `--sample-type` | `VLP` | `VLP` or `BMV` — decides which benchmarks dir + which metrics get gated |
+| `--benchmarks-dir` | `benchmarks/` | Override location of reference CSVs |
+| `--no-report` | off | Skip writing `eval_report.md`; still returns the eval dict |
+| `--json` | off | Print full result as JSON instead of the headline |
+
+### Reference-set management (manual gate)
+
+#### `analysis.seed_benchmarks` — one-shot initial seed
+
+```bash
+uv run python -m analysis.seed_benchmarks
+```
+
+No flags. Reads `results/vlp17_v2/`, `results/vlp20_v2/`, `results/vlp100_v2/`, and `results/bmv/`, writes `benchmarks/<sample_type>/{reference_runs,reference_hand}.csv`. Re-running overwrites — use `add_to_reference` for incremental growth instead.
+
+#### `analysis.add_to_reference run` — append a run to `reference_runs.csv`
+
+```bash
+uv run python -m analysis.add_to_reference run <run_dir> --approver <name> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `run_dir` (positional) | required | Directory with `vlp_measurements.csv` or `bmv_measurements.csv` |
+| `--sample-type` | `VLP` | `VLP` or `BMV` |
+| `--sample-name` | folder name | Override the auto-derived sample name |
+| `--approver` | required | Person approving this run (audit trail) |
+| `--notes` | empty | Free-form note explaining why this run is reference-worthy |
+| `--force` | off | Replace existing rows on `(sample_name, filename)` collision instead of refusing |
+| `--benchmarks-dir` | `benchmarks/` | Override target directory |
+
+#### `analysis.add_to_reference hand` — append hand measurements to `reference_hand.csv`
+
+```bash
+uv run python -m analysis.add_to_reference hand <hand_csv> --sample-name <name> --scientist <name> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `hand_csv` (positional) | required | ImageJ-exported CSV (paired gold+capsid for VLP, single column for BMV) |
+| `--sample-name` | required | Identifier shared with the script run this hand data validates |
+| `--sample-type` | `VLP` | `VLP` or `BMV` |
+| `--unit` | `um` | Length unit in source CSV: `um` or `nm` |
+| `--scientist` | required | Person who hand-measured (audit trail) |
+| `--measure-date` | today | ISO date when measurements were taken |
+| `--notes` | empty | Free-form note |
+| `--run-dir` | none | Also copy the hand CSV into `<run-dir>/hand/` so per-batch eval picks it up |
+| `--force` | off | Replace existing rows on `(sample_name, source_file)` collision |
+| `--benchmarks-dir` | `benchmarks/` | Override target directory |
+
+### Plotting helpers
+
+#### `analysis.plot_vlp_scatter` — combined scatter / 2D-hist / KDE / pooled hist
+
+```bash
+uv run python -m analysis.plot_vlp_scatter <csv> [<csv> …] [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `csvs` (positional, ≥1) | required | One or more `vlp_measurements.csv` files |
+| `--out-dir` | first CSV's folder | Where the combined plots land |
+| `--reliable-only` | on | Plot only reliable detections (default behavior) |
+| `--combined-hist2d` | off | One pooled 2D histogram instead of per-sample subplots |
+
+#### `analysis.plot_capsid_groups` — per-image strip plot, gold + capsid medians side-by-side
+
+```bash
+uv run python -m analysis.plot_capsid_groups <csv> [flags]
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `csv` (positional) | required | A `vlp_measurements.csv` |
+| `--out` | CSV's folder | Where `capsid_groups.png` lands |
+
 ## Data model
 
 - `incoming/<batch_name>/` — DM3/DM4 dump, one folder per imaging session/grid.
