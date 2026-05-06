@@ -5,8 +5,8 @@
 # symlinks; preserves the local CLAUDE.md (which scientists may edit).
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
-#   curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh | sh
+#   curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
+#   curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
 #   ./bootstrap.sh --relink     # only refresh symlinks; don't pull
 #
 # What it does:
@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-REPO_URL="${LABFLOW_REPO:-https://github.com/lily-de/labflow-ai.git}"
+REPO_URL="${LABFLOW_REPO:-https://github.com/lilydelalande/labflow-ai.git}"
 BRANCH="${LABFLOW_BRANCH:-main}"
 CACHE_DIR=".labflow"
 
@@ -137,6 +137,6 @@ cat <<EOF
 
   Both paths write to results/<batch_name>/ — identical outputs.
 
-  Update later:  curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
+  Update later:  curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
 
 EOF
