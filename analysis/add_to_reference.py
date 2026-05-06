@@ -6,32 +6,37 @@ Two operations:
 
   add_run     — append per-image rows from a measurement run into
                 `benchmarks/<sample_type>/reference_runs.csv`.
+                Dedup keys: (sample_name, filename).
 
   add_hand    — append per-particle hand-measurement rows into
-                `benchmarks/<sample_type>/reference_hand.csv`.
+                `benchmarks/<sample_type>/reference_hand.csv`. Optionally also
+                copies the CSV into `<run_dir>/hand/` so the per-batch eval
+                script-vs-hand comparison fires on subsequent eval runs.
+                Dedup keys: (sample_name, source_file).
 
-Both APPEND, never overwrite. The seed (`seed_benchmarks.py`) overwrites; this
-script is for incremental growth after the initial seed.
+Both APPEND, never overwrite. Use `force=True` / `--force` to replace
+existing rows that collide on the dedup keys.
 
 Usage (CLI):
-  uv run python -m analysis.add_to_reference run results/<batch_dir> \\
+  uv run python -m analysis.add_to_reference run results/<sample_name> \\
       --approver Lily --notes "good batch, hand-validated"
 
   uv run python -m analysis.add_to_reference hand path/to/hand.csv \\
-      --batch-id VLP17_2026-05-15 --format paired --unit um \\
-      --scientist Lily --measure-date 2026-05-15
+      --sample-name VLP17_2026-05-15 --unit um \\
+      --scientist Lily --run-dir results/<sample_name>
 
 Usage (programmatic):
   from analysis.add_to_reference import add_run, add_hand
-  add_run(run_dir="results/foo", sample_type="VLP", approver="Lily", notes="...")
-  add_hand(hand_csv="path/to/h.csv", batch_id="...", sample_type="VLP",
-           hand_format="paired", length_unit="um", scientist="Lily")
+  add_run(run_dir="results/foo", sample_type="VLP", approver="Lily", notes="…")
+  add_hand(hand_csv="path/h.csv", sample_name="…", sample_type="VLP",
+           length_unit="um", scientist="Lily", run_dir="results/foo")
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import shutil
 import sys
 from pathlib import Path
 
@@ -41,7 +46,7 @@ import pandas as pd
 from analysis.seed_benchmarks import (
     _per_image_summary,
     _parse_paired_hand,
-    _parse_single_hand,
+    _safe_relpath,
 )
 
 REPO_ROOT     = Path(__file__).resolve().parent.parent
@@ -99,7 +104,6 @@ def _append_csv_dedup(
                     f"  examples:\n    {sample_str}\n"
                     f"  pass force=True (or --force on the CLI) to REPLACE the existing rows."
                 )
-            # force=True: drop matching rows from existing
             mask = pd.Series(False, index=existing.index)
             for t in overlap:
                 cond = pd.Series(True, index=existing.index)
@@ -118,24 +122,15 @@ def _append_csv_dedup(
     return n_before, len(merged), n_replaced
 
 
-def _infer_subtype_from_filename(filename: str) -> str:
-    """VLP17_*.dm4 → VLP17, VLP_100_*.dm3 → VLP_100, etc."""
-    import re
-    stem = Path(filename).stem
-    m = re.match(r"^([A-Za-z_]+\d+)", stem)
-    return m.group(1) if m else stem
-
-
 # ── add_run ───────────────────────────────────────────────────────────────
 
 def add_run(
     run_dir: str | Path,
     *,
     sample_type: str = "VLP",
-    batch_id: str | None = None,
+    sample_name: str | None = None,
     approver: str = "",
     notes: str = "",
-    sample_subtype: str | None = None,
     benchmarks_dir: str | Path = DEFAULT_BENCH,
     force: bool = False,
 ) -> dict:
@@ -143,8 +138,8 @@ def add_run(
     Append per-image rows from `run_dir/vlp_measurements.csv` to
     `benchmarks/<sample_type>/reference_runs.csv`.
 
-    Dedup: refuses to add rows with the same (batch_id, filename) as existing
-    entries unless `force=True`, in which case the existing rows are replaced.
+    `sample_name` defaults to the run_dir folder name. Dedup on
+    (sample_name, filename); pass force=True to replace existing rows.
     """
     run_dir = Path(run_dir)
     csv     = run_dir / "vlp_measurements.csv"
@@ -153,33 +148,27 @@ def add_run(
     if not approver:
         raise ValueError("approver is required (e.g. 'Lily')")
 
-    bid = batch_id or run_dir.name
-
+    name = sample_name or run_dir.name
     rows = _per_image_summary(
-        csv_path       = csv,
-        batch_id       = bid,
-        sample_subtype = sample_subtype or "MIXED",
-        approver       = approver,
-        notes          = notes,
+        csv_path    = csv,
+        sample_name = name,
+        approver    = approver,
+        notes       = notes,
     )
-    if sample_subtype is None:
-        rows["sample_subtype"] = rows["filename"].apply(_infer_subtype_from_filename)
 
     runs_csv, _ = _bench_paths(sample_type, Path(benchmarks_dir))
     n_before, n_after, n_replaced = _append_csv_dedup(
         rows, runs_csv,
-        dedup_keys=["batch_id", "filename"],
+        dedup_keys=["sample_name", "filename"],
         force=force,
     )
-
     return {
         "csv_path":   str(runs_csv),
         "n_added":    int(len(rows)),
         "n_replaced": n_replaced,
         "n_before":   n_before,
         "n_after":    n_after,
-        "batch_id":   bid,
-        "subtypes":   sorted(rows["sample_subtype"].unique().tolist()),
+        "sample_name": name,
     }
 
 
@@ -188,27 +177,24 @@ def add_run(
 def add_hand(
     hand_csv: str | Path,
     *,
-    batch_id: str,
+    sample_name: str,
     sample_type: str = "VLP",
-    hand_format: str = "paired",     # "paired" (alternating gold/capsid) or "capsid_only"
-    length_unit: str = "um",         # "um" or "nm"
+    length_unit: str = "um",
     scientist: str = "",
     measure_date: str | None = None,
-    image_filename: str | None = None,
     notes: str = "",
+    run_dir: str | Path | None = None,
     benchmarks_dir: str | Path = DEFAULT_BENCH,
     force: bool = False,
 ) -> dict:
     """
-    Append per-particle rows from a hand-measurement CSV to
+    Append per-particle rows from a paired (gold + capsid) ImageJ CSV to
     `benchmarks/<sample_type>/reference_hand.csv`.
 
-    `hand_format`:
-      - "paired"      — alternating gold (odd) / capsid (even) rows, 2N rows for N particles
-      - "capsid_only" — every row is one capsid measurement (used for per-image diagnostics)
+    If `run_dir` is provided, ALSO copy the CSV into `<run_dir>/hand/` so
+    `evaluate(<run_dir>)` picks it up for the per-run hand-vs-script section.
 
-    `image_filename` is set on every appended row. Leave None for whole-batch
-    aggregates; set to the .dm4 filename for per-image diagnostic measurements.
+    Dedup on (sample_name, source_file); force=True to replace existing rows.
     """
     hand_csv = Path(hand_csv)
     if not hand_csv.exists():
@@ -218,53 +204,40 @@ def add_hand(
 
     measure_date = measure_date or _dt.date.today().isoformat()
 
-    if hand_format == "paired":
-        rows = _parse_paired_hand(
-            csv_path     = hand_csv,
-            length_unit  = length_unit,
-            batch_id     = batch_id,
-            scientist    = scientist,
-            measure_date = measure_date,
-            notes        = notes,
-        )
-    elif hand_format == "capsid_only":
-        if image_filename is None:
-            print("warning: capsid_only without image_filename — leaving image_filename=NULL",
-                  file=sys.stderr)
-        rows = _parse_single_hand(
-            csv_path       = hand_csv,
-            length_unit    = length_unit,
-            batch_id       = batch_id,
-            image_filename = image_filename or "",
-            scientist      = scientist,
-            measure_date   = measure_date,
-            notes          = notes,
-        )
-        if image_filename is None:
-            rows["image_filename"] = None
-    else:
-        raise ValueError(f"unknown hand_format: {hand_format!r} (expected 'paired' or 'capsid_only')")
+    # Optionally also drop the CSV into <run_dir>/hand/ for filesystem-paired eval.
+    copied_to: str | None = None
+    if run_dir is not None:
+        run_dir_path = Path(run_dir)
+        hand_dir = run_dir_path / "hand"
+        hand_dir.mkdir(parents=True, exist_ok=True)
+        target = hand_dir / hand_csv.name
+        if target.resolve() != hand_csv.resolve():
+            shutil.copy2(hand_csv, target)
+        copied_to = str(target)
 
-    if image_filename is not None:
-        rows["image_filename"] = image_filename
-
-    _, hand_path = _bench_paths(sample_type, Path(benchmarks_dir))
-    # Dedup on (batch_id, source_file): the same hand CSV uploaded twice for
-    # the same batch is the duplicate case we're guarding against.
-    n_before, n_after, n_replaced = _append_csv_dedup(
-        rows, hand_path,
-        dedup_keys=["batch_id", "source_file"],
-        force=force,
+    rows = _parse_paired_hand(
+        csv_path     = hand_csv,
+        length_unit  = length_unit,
+        sample_name  = sample_name,
+        scientist    = scientist,
+        measure_date = measure_date,
+        notes        = notes,
     )
 
+    _, hand_path = _bench_paths(sample_type, Path(benchmarks_dir))
+    n_before, n_after, n_replaced = _append_csv_dedup(
+        rows, hand_path,
+        dedup_keys=["sample_name", "source_file"],
+        force=force,
+    )
     return {
         "csv_path":       str(hand_path),
         "n_added":        int(len(rows)),
         "n_replaced":     n_replaced,
         "n_before":       n_before,
         "n_after":        n_after,
-        "batch_id":       batch_id,
-        "image_filename": image_filename,
+        "sample_name":    sample_name,
+        "copied_to_run":  copied_to,
         "capsid_mean_nm": float(rows["hand_capsid_diameter_nm"].mean()),
         "gold_mean_nm":   float(rows["hand_gold_diameter_nm"].mean())
                               if rows["hand_gold_diameter_nm"].notna().any() else None,
@@ -285,45 +258,28 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("run", help="Append a measurement run to reference_runs.csv")
-    pr.add_argument("run_dir", type=Path,
-                    help="Directory containing vlp_measurements.csv")
+    pr.add_argument("run_dir", type=Path)
     pr.add_argument("--sample-type", default="VLP")
-    pr.add_argument("--batch-id", default=None,
+    pr.add_argument("--sample-name", default=None,
                     help="Defaults to the folder name of run_dir")
-    pr.add_argument("--approver", required=True,
-                    help="Person approving this run (recorded in CSV)")
-    pr.add_argument("--notes", default="",
-                    help="Free-form note (why this run is reference-worthy)")
-    pr.add_argument("--sample-subtype", default=None,
-                    help="Force a single subtype (VLP17, VLP20, ...). "
-                         "Default: auto-infer per image from filename.")
-    pr.add_argument("--force", action="store_true",
-                    help="If (batch_id, filename) rows already exist in "
-                         "reference_runs.csv, REPLACE them instead of refusing.")
+    pr.add_argument("--approver", required=True)
+    pr.add_argument("--notes", default="")
+    pr.add_argument("--force", action="store_true")
     pr.add_argument("--benchmarks-dir", type=Path, default=DEFAULT_BENCH)
 
     ph = sub.add_parser("hand", help="Append hand measurements to reference_hand.csv")
     ph.add_argument("hand_csv", type=Path)
-    ph.add_argument("--batch-id", required=True,
-                    help="Join key. Use the same batch_id as the script run "
-                         "this hand data validates.")
+    ph.add_argument("--sample-name", required=True,
+                    help="Identifier shared with the script run this hand data validates "
+                         "(usually the run folder name).")
     ph.add_argument("--sample-type", default="VLP")
-    ph.add_argument("--format", dest="hand_format",
-                    choices=["paired", "capsid_only"], default="paired",
-                    help="paired = alternating gold/capsid rows; "
-                         "capsid_only = every row is a capsid measurement")
-    ph.add_argument("--unit", dest="length_unit", choices=["um", "nm"], default="um",
-                    help="Length unit in the CSV's 'Length' column")
+    ph.add_argument("--unit", dest="length_unit", choices=["um", "nm"], default="um")
     ph.add_argument("--scientist", required=True)
-    ph.add_argument("--measure-date", default=None,
-                    help="ISO date (default: today)")
-    ph.add_argument("--image-filename", default=None,
-                    help="Per-image diagnostic? Pass the .dm4 filename. "
-                         "Whole-batch aggregate? Leave unset.")
+    ph.add_argument("--measure-date", default=None)
     ph.add_argument("--notes", default="")
-    ph.add_argument("--force", action="store_true",
-                    help="If (batch_id, source_file) rows already exist in "
-                         "reference_hand.csv, REPLACE them instead of refusing.")
+    ph.add_argument("--run-dir", type=Path, default=None,
+                    help="Also copy the hand CSV into <run-dir>/hand/ so eval can pair it.")
+    ph.add_argument("--force", action="store_true")
     ph.add_argument("--benchmarks-dir", type=Path, default=DEFAULT_BENCH)
 
     args = p.parse_args()
@@ -333,10 +289,9 @@ def main() -> None:
             result = add_run(
                 run_dir         = args.run_dir,
                 sample_type     = args.sample_type,
-                batch_id        = args.batch_id,
+                sample_name     = args.sample_name,
                 approver        = args.approver,
                 notes           = args.notes,
-                sample_subtype  = args.sample_subtype,
                 benchmarks_dir  = args.benchmarks_dir,
                 force           = args.force,
             )
@@ -344,14 +299,13 @@ def main() -> None:
         elif args.cmd == "hand":
             result = add_hand(
                 hand_csv       = args.hand_csv,
-                batch_id       = args.batch_id,
+                sample_name    = args.sample_name,
                 sample_type    = args.sample_type,
-                hand_format    = args.hand_format,
                 length_unit    = args.length_unit,
                 scientist      = args.scientist,
                 measure_date   = args.measure_date,
-                image_filename = args.image_filename,
                 notes          = args.notes,
+                run_dir        = args.run_dir,
                 benchmarks_dir = args.benchmarks_dir,
                 force          = args.force,
             )
