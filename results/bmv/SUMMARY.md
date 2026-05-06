@@ -20,7 +20,7 @@
 - Histograms: `results/bmv/bmv_histogram.png`
 
 ## Per-image
-| filename | n_detections | n_reliable | reliable% | wall_fit% | capsid med (nm) |
+| filename | n_detections | n_reliable | reliable_rate | wall_fit_success_rate | capsid median (nm) |
 |---|---|---|---|---|---|
 | BMV_a.dm3 | 606 | 181 | 30% | 75% | 28.81 |
 | BMV_b.dm3 | 520 | 247 | 48% | 83% | 28.31 |
@@ -33,3 +33,10 @@
 | BMV_i.dm3 | 110 | 16 | 15% | 68% | 29.27 |
 | BMV_j.dm3 | 110 | 16 | 15% | 81% | 29.92 |
 | BMV_k.dm3 | 91 | 24 | 26% | 73% | 30.04 |
+
+## Glossary
+
+- **`reliable_rate`** — percentage of detected particles whose capsid measurement passed all quality filters. Low = many particles look problematic.
+- **`wall_fit_success_rate`** — percentage of detected particles for which the script successfully fit a capsid wall. Low = the protein ring isn't clear enough (weak stain, poor contrast, focus issues).
+- **CV (coefficient of variation)** — `std / mean`, a dimensionless way to express spread. Used in the eval as `median_wall_cv` (per particle, std/mean of wall radius across 8 angular sectors — 0 = perfect circle, higher = non-round wall) and `iqr_wall_cv` (spread of those CVs across particles in the image — high = some clean fits, some bad).
+- See `results/bmv/eval_report.md` for full metric definitions and how warnings are flagged.

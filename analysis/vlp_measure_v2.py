@@ -666,12 +666,12 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
     ]
     if has_gold:
         md += [
-            "| filename | n_gold | n_reliable | reliable% | wall_fit% | gold med (nm) | capsid med (nm) |",
+            "| filename | n_gold | n_reliable | reliable_rate | wall_fit_success_rate | gold median (nm) | capsid median (nm) |",
             "|---|---|---|---|---|---|---|",
         ]
     else:
         md += [
-            "| filename | n_detections | n_reliable | reliable% | wall_fit% | capsid med (nm) |",
+            "| filename | n_detections | n_reliable | reliable_rate | wall_fit_success_rate | capsid median (nm) |",
             "|---|---|---|---|---|---|",
         ]
     for r in result["per_image"]:
@@ -687,6 +687,21 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
                 f"{r['reliable_rate']*100:.0f}% | {r['wall_fit_success_rate']*100:.0f}% | "
                 f"{r['capsid_median_nm']:.2f} |"
             )
+
+    # Brief glossary so the column names + the eval CV terms are inline.
+    md += [
+        "",
+        "## Glossary",
+        "",
+        "- **`reliable_rate`** — percentage of detected particles whose capsid measurement passed all quality filters. Low = many particles look problematic.",
+        "- **`wall_fit_success_rate`** — percentage of detected particles for which the script successfully fit a capsid wall. Low = the protein ring isn't clear enough (weak stain, poor contrast, focus issues).",
+        "- **CV (coefficient of variation)** — `std / mean`, a dimensionless way to express spread. Used in the eval as `median_wall_cv` (per particle, std/mean of wall radius across 8 angular sectors — 0 = perfect circle, higher = non-round wall) and `iqr_wall_cv` (spread of those CVs across particles in the image — high = some clean fits, some bad).",
+    ]
+    eval_report_path = (result.get("eval") or {}).get("report_path") \
+        or result.get("outputs", {}).get("eval_report")
+    if eval_report_path:
+        md.append(f"- See `{eval_report_path}` for full metric definitions and how warnings are flagged.")
+
     path = out_dir / "SUMMARY.md"
     path.write_text("\n".join(md) + "\n")
     return path
