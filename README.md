@@ -8,18 +8,34 @@ The whole stack works equally well via plain CLI (a scientist running scripts di
 
 | | |
 |---|---|
-| `analysis/vlp_measure_v2.py` | VLP gold + capsid measurement. BMV-style radial-profile wall fit, quality-based reliability, mag-invariant smoothing. **Primary VLP script.** |
-| `analysis/vlp_measure.py` | Original VLP script (population-clip reliability). Kept for comparison; v2 is the one to use. |
+| `analysis/vlp_measure_v2.py` | VLP gold + capsid measurement. **Self-contained — drop just this file alongside images and run it.** Image loading, normalisation, gold detection, capsid wall fit, overlays, summary. |
 | `analysis/bmv_measure.py` | BMV / BOG capsid measurement (no gold anchor). Hough detection + WALL_DESCENT_FRAC wall fit. |
 | `analysis/plot_vlp_scatter.py` | Combined scatter / 2D-hist / KDE / pooled hist across multiple VLP samples. |
 | `analysis/plot_capsid_groups.py` | Per-image strip plot showing gold + capsid medians side-by-side. |
+| `analysis/eval.py` | Compares a measurement run against the reference benchmarks (per-image quality + hand vs script). |
+| `analysis/seed_benchmarks.py` | Initial seeder for `benchmarks/<sample_type>/`. |
+| `analysis/add_to_reference.py` | Manual gate for appending new approved runs / hand data into the benchmarks. |
+| `benchmarks/<sample_type>/` | `reference_runs.csv` (script outputs we trust) + `reference_hand.csv` (per-particle hand measurements). Eval compares new runs against these. |
 | `LAB_NOTEBOOK.md` | Decision log: every non-trivial measurement decision, with dates and reasons. Read this first when revisiting. |
-| `CLAUDE.md` | Co-scientist working principles + the auto-bootstrap rule any agent should follow. |
+| `CLAUDE.md` / `AGENTS.md` | Co-scientist working principles + auto-bootstrap rule for Claude / Codex. |
 | `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. Tool surface, file conventions, scientist workflows. |
 | `bootstrap.sh` | One-shot installer for new scientist repos. |
-| `benchmarks/` | *(planned)* Gold-standard runs and hand measurements per sample type. Curated manually. |
 | `incoming/` | *(convention)* DM3 dump location for new sample batches. |
-| `results/` | Per-run outputs: CSVs, overlays, plots, `SUMMARY.md`. |
+| `results/` | Per-run outputs: CSVs, overlays, plots, `SUMMARY.md`, `eval_report.md`. |
+
+## Single-file usage (zero setup)
+
+`analysis/vlp_measure_v2.py` has no internal dependencies on other lab files — just standard scientific Python (`numpy`, `pandas`, `matplotlib`, `scikit-image`, `scipy`, `ncempy`, `tqdm`). If you only want VLP measurement and don't need the eval / benchmarks / agent layers, drop the file alongside a folder of images and run:
+
+```bash
+mkdir my-tem-project && cd my-tem-project
+curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/analysis/vlp_measure_v2.py -o vlp_measure_v2.py
+uv init && uv add ncempy pandas matplotlib scipy scikit-image tqdm
+mv ~/my-images.zip . && unzip my-images.zip   # or however your DM3s arrive
+uv run python vlp_measure_v2.py my-images/ --workers 6
+```
+
+Outputs land in `results/vlp_v2/`. The eval auto-import skips silently when the broader stack isn't around.
 
 ## Installing the stack into a new lab repo
 
