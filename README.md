@@ -29,7 +29,7 @@ The whole stack works equally well via plain CLI (a scientist running scripts di
 
 ```bash
 mkdir my-tem-project && cd my-tem-project
-curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/analysis/vlp_measure_v2.py -o vlp_measure_v2.py
+curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/analysis/vlp_measure_v2.py -o vlp_measure_v2.py
 uv init && uv add ncempy pandas matplotlib scipy scikit-image tqdm
 mv ~/my-images.zip . && unzip my-images.zip   # or however your DM3s arrive
 uv run python vlp_measure_v2.py my-images/ --workers 6
@@ -43,7 +43,7 @@ For a scientist setting up TEM analysis in a fresh directory:
 
 ```bash
 cd ~/my-tem-project
-curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh | sh
+curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
 ```
 
 This:

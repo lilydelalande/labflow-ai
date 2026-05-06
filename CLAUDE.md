@@ -37,7 +37,7 @@ Then run the bootstrap. If they ask what it does, answer plainly: it pulls the a
 The bootstrap command — download the script to a temp file, then run it. This reads more obviously than process substitution and avoids the "Contains process_substitution" warning in the permission prompt:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
+curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
 ```
 
 The Claude Code permission prompt for that command is a second consent step. Don't try to suppress it. The pre-narration sentence prevents that prompt from appearing without context.
