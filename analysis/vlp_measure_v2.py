@@ -33,19 +33,110 @@ from pathlib import Path
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import ncempy.io as nio
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from scipy import ndimage as ndi
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.spatial import cKDTree
+from skimage import exposure, filters, morphology, measure
 
-# Reuse the well-tested image loading + gold detection from v1
-from analysis.vlp_measure import (
-    load_dm,
-    normalise,
-    detect_gold,
-    radial_profile,
-)
+
+# ── Shared utilities (image loading, normalisation, gold NP detection,
+#    radial profile sampling). These live here so that vlp_measure_v2.py is
+#    self-contained — a scientist can drop just this file alongside images
+#    and run it. The legacy `vlp_measure.py` re-imports them from here. ──
+
+def load_dm(path: Path) -> tuple[np.ndarray, float]:
+    """Return (image as float32, nm_per_pixel) for a Gatan .dm3 / .dm4 file."""
+    d = nio.read(str(path))
+    img = d["data"].astype(np.float32)
+    nm_per_px = float(d["pixelSize"][0])
+    return img, nm_per_px
+
+
+def normalise(img: np.ndarray) -> np.ndarray:
+    """Percentile-stretch to [0,1] then CLAHE for local contrast."""
+    lo, hi = np.percentile(img, [0.5, 99.5])
+    img = np.clip((img - lo) / (hi - lo), 0, 1)
+    return exposure.equalize_adapthist(img, clip_limit=0.02)
+
+
+def auto_threshold(img_norm: np.ndarray, gold_threshold: float | None) -> float:
+    """Otsu on the dark half of the histogram. Override with explicit value if given."""
+    if gold_threshold is not None:
+        return gold_threshold
+    dark_pixels = img_norm[img_norm < 0.5]
+    if len(dark_pixels) < 100:
+        return 0.05
+    try:
+        return float(filters.threshold_otsu(dark_pixels))
+    except Exception:
+        return 0.05
+
+
+def detect_gold(
+    img_norm: np.ndarray,
+    nm_per_px: float,
+    threshold: float | None,
+    min_gold_nm: float,
+    max_gold_nm: float,
+) -> tuple[pd.DataFrame, float]:
+    """
+    Threshold + connected-component detection of gold NPs.
+    Returns (DataFrame[centroid_y, centroid_x, gold_diameter_nm, gold_radius_px],
+             threshold_used).
+    """
+    t = auto_threshold(img_norm, threshold)
+    binary = img_norm < t
+    binary = morphology.remove_small_objects(binary, max_size=3)
+
+    labels = ndi.label(binary)[0]
+    props = measure.regionprops_table(
+        labels,
+        properties=("label", "area", "centroid", "eccentricity", "solidity"),
+    )
+    df = pd.DataFrame(props)
+    if df.empty:
+        return pd.DataFrame(
+            columns=["centroid_y", "centroid_x", "gold_diameter_nm", "gold_radius_px"]
+        ), t
+
+    df["gold_diameter_nm"] = 2 * np.sqrt(df["area"] / np.pi) * nm_per_px
+    df["gold_radius_px"]   = np.sqrt(df["area"] / np.pi)
+
+    df = df[
+        (df["solidity"] > 0.75)
+        & (df["eccentricity"] < 0.75)
+        & (df["gold_diameter_nm"] >= min_gold_nm)
+        & (df["gold_diameter_nm"] <= max_gold_nm)
+    ]
+
+    df = df.rename(columns={"centroid-0": "centroid_y", "centroid-1": "centroid_x"})
+    return (
+        df[["centroid_y", "centroid_x", "gold_diameter_nm", "gold_radius_px"]].reset_index(drop=True),
+        t,
+    )
+
+
+def radial_profile(
+    img: np.ndarray,
+    cy: float,
+    cx: float,
+    r_start: int,
+    r_end: int,
+    n_angles: int = 360,
+) -> np.ndarray:
+    """Mean intensity at each integer radius from r_start to r_end (px) around (cy, cx)."""
+    h, w = img.shape
+    angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
+    profile = np.zeros(r_end - r_start)
+    for i, r in enumerate(range(r_start, r_end)):
+        ys = np.clip((cy + r * np.sin(angles)).astype(int), 0, h - 1)
+        xs = np.clip((cx + r * np.cos(angles)).astype(int), 0, w - 1)
+        profile[i] = img[ys, xs].mean()
+    return profile
 
 
 # ── Tuning constants ─────────────────────────────────────────────────────────
@@ -515,6 +606,29 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
             f"- **Capsid:** mean {s['capsid_mean_nm']:.2f} ± {s['capsid_std_nm']:.2f} nm "
             f"(median {s['capsid_median_nm']:.2f})",
         ]
+    # Eval headline (only if eval ran)
+    ev = result.get("eval") or {}
+    if ev and "skipped" not in ev:
+        md.append("")
+        md.append("## Eval")
+        n_warns = ev.get("n_warns_total", 0)
+        n_ref   = ev.get("n_ref_runs", 0)
+        md.append(f"- Per-image quality check: compared against {n_ref} reference runs; "
+                  f"**{n_warns} warning(s)**")
+        H = ev.get("hand_vs_script")
+        if H is None:
+            md.append("- Hand vs script: no hand measurements registered for this batch")
+        else:
+            md.append(f"- Hand vs script: "
+                      f"Δ capsid **{H['delta_capsid_nm']:+.2f} nm** "
+                      f"(hand n={H['hand_n']}; "
+                      f"hand source: {H['hand_source']})")
+        if ev.get("report_path"):
+            md.append(f"- Full report: `{ev['report_path']}`")
+    elif ev.get("skipped"):
+        md.append("")
+        md.append(f"## Eval\n- Skipped: {ev['skipped']}")
+
     md += [
         "",
         "## Outputs",
@@ -649,6 +763,28 @@ def run(
             "summary_md":       "",
         },
     }
+    # Auto-eval against the reference benchmarks (if available).
+    # Wrapped in try/except so this script is fully usable standalone — drop
+    # the file alone next to a folder of images and it still measures.
+    try:
+        from analysis.eval import evaluate  # noqa: WPS433
+        eval_result = evaluate(result, sample_type=sample_type, write_report=True)
+        result["eval"] = {
+            "n_warns_total":  eval_result["n_warns_total"],
+            "n_ref_runs":     eval_result["n_ref_runs"],
+            "hand_vs_script": eval_result["hand_vs_script"],
+            "report_path":    eval_result.get("report_path"),
+        }
+        if eval_result.get("report_path"):
+            result["outputs"]["eval_report"] = eval_result["report_path"]
+    except (ImportError, FileNotFoundError) as exc:
+        # No analysis.eval module (single-file standalone) or no
+        # reference_runs.csv (fresh repo, no benchmarks yet). Either is fine.
+        result["eval"] = {"skipped": f"{type(exc).__name__}: {exc}"}
+    except Exception as exc:  # pragma: no cover (defensive)
+        result["eval"] = {"skipped": f"eval error: {exc}"}
+
+    # SUMMARY.md is written last so the eval block can be folded in.
     summary_md_path = _write_summary_md(out_dir, result)
     result["outputs"]["summary_md"] = str(summary_md_path)
     return result

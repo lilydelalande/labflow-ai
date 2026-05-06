@@ -5,8 +5,8 @@
 # symlinks; preserves the local CLAUDE.md (which scientists may edit).
 #
 # Usage:
+#   curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
 #   curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh | sh
-#   bash <(curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh)
 #   ./bootstrap.sh --relink     # only refresh symlinks; don't pull
 #
 # What it does:
@@ -71,12 +71,16 @@ mkdir -p .claude/skills
 ln -sfn "../../$CACHE_DIR/.claude/skills/lab-pipeline" .claude/skills/lab-pipeline
 say ".claude/skills/lab-pipeline -> $CACHE_DIR/.claude/skills/lab-pipeline"
 
-# 3. Copy CLAUDE.md (only if absent — preserve local edits)
+# 3. Copy CLAUDE.md (only if absent — preserve local edits) + symlink AGENTS.md
 if [ ! -f CLAUDE.md ]; then
     cp "$CACHE_DIR/CLAUDE.md" CLAUDE.md
     say "CLAUDE.md copied (you can edit it locally; commit upstream PRs to share changes)"
 else
     say "CLAUDE.md already exists — leaving it alone"
+fi
+if [ ! -e AGENTS.md ]; then
+    ln -sfn CLAUDE.md AGENTS.md
+    say "AGENTS.md -> CLAUDE.md (Codex reads AGENTS.md; same content as CLAUDE.md)"
 fi
 
 # 4. .gitignore
@@ -133,6 +137,6 @@ cat <<EOF
 
   Both paths write to results/<batch_name>/ — identical outputs.
 
-  Update later:  bash <(curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh)
+  Update later:  curl -sSL https://raw.githubusercontent.com/lily-de/labflow-ai/main/bootstrap.sh -o /tmp/labflow-bootstrap.sh && bash /tmp/labflow-bootstrap.sh
 
 EOF

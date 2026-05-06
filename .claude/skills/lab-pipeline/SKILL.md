@@ -19,9 +19,15 @@ The scientist asks any of:
 
 If the request is exploratory ("show me the radial profile of particle 12") use the existing scripts directly — this skill is for the standard measure → eval → report workflow.
 
-## Tool surface (Phase 1 — measurement only)
+## Tool surface
 
-The eval / approve / validate tools are still being designed. Right now the working tool is:
+Three importable Python tools, all in `analysis/`:
+
+1. `vlp_measure_v2.run(...)` — measurement (always; auto-runs eval if reference exists)
+2. `eval.evaluate(...)` — compare a run to the reference benchmarks
+3. `add_to_reference.add_run(...)` / `add_to_reference.add_hand(...)` — manually grow the reference set
+
+Prefer importing and calling these directly over the CLI wrappers — the structured returns are the cleanest interface.
 
 ### `vlp_measure_v2.run()` — measure a VLP sample
 
@@ -93,6 +99,52 @@ print(json.dumps(r, indent=2))
 
 The full result is small (kilobytes) — fine to ingest as one tool result. If a user wants to run the same thing via the terminal, they invoke `uv run python -m analysis.vlp_measure_v2 …` directly; the CLI wrapper calls the same `run()` and prints a headline.
 
+`run()` automatically calls `evaluate()` at the end (if `benchmarks/vlp/reference_runs.csv` exists), so a single call gives you both `SUMMARY.md` and `eval_report.md`. Inspect `result["eval"]` for the headline; full report is at `result["outputs"]["eval_report"]`.
+
+### `eval.evaluate(run_or_dir, sample_type="VLP")` — compare against the reference
+
+Two checks per the LAB_NOTEBOOK design:
+
+- **Per-image quality check** — flags any image whose dimensionless metrics (`wall_fit_success_rate`, `reliable_rate`, `drop_rate`, `median_wall_cv`, `capsid_*`) sit outside median ± 2 × IQR of the same-subtype reference distribution.
+- **Hand vs script** — if `reference_hand.csv` has rows tagged with this batch_id (or, fallback, the same sample_subtype), reports `hand_capsid_mean − script_capsid_mean`.
+
+Accepts either a `run()` dict or a path to a run directory. Auto-called inside `run()`; rarely needed standalone unless re-evaluating an old run after the reference grows.
+
+### `add_to_reference.add_run(...)` / `add_to_reference.add_hand(...)` — grow the reference
+
+The **manual gate** for promoting new data into `benchmarks/vlp/`. Both functions:
+
+- **Refuse duplicates by default.** `add_run` keys on `(batch_id, filename)`; `add_hand` keys on `(batch_id, source_file)`. If the data is already in the reference, you get a `DuplicateReferenceError` listing the colliding rows. Pass `force=True` to *replace* the existing rows (e.g. when re-running a script version).
+- **Require `approver` (run) or `scientist` (hand)** as a non-empty string. Recorded in the CSV as the audit trail.
+
+```python
+from analysis.add_to_reference import add_run, add_hand
+
+add_run(
+    run_dir       = "results/2026-05-15_VLP17_batch4",
+    sample_type   = "VLP",
+    approver      = "Lily",
+    notes         = "Hand-validated; replaces prior VLP17 reference.",
+    # batch_id auto-derives from run_dir folder name; sample_subtype auto-infers per image
+)
+
+add_hand(
+    hand_csv     = "results/2026-05-15_VLP17_batch4/hand/measurements.csv",
+    batch_id     = "2026-05-15_VLP17_batch4",   # match the run's batch_id so eval can pair them
+    sample_type  = "VLP",
+    hand_format  = "paired",          # or "capsid_only" for per-image diagnostic CSVs
+    length_unit  = "um",              # or "nm" — depends on ImageJ calibration
+    scientist    = "Lily",
+    measure_date = "2026-05-15",
+)
+```
+
+When to invoke `add_run` / `add_hand`:
+- The scientist explicitly asks: "add this run to the reference", "save these as benchmarks", "this batch should be the new baseline", etc.
+- Never invoke automatically. Promotion to reference is always a deliberate human decision.
+
+When the dedup error fires, surface the exact collision to the scientist (the message lists the colliding `batch_id` + `filename`). Don't auto-`force` — let the scientist decide whether the existing rows should be replaced.
+
 ## File conventions
 
 All paths are relative to the **current working directory** (the repo root the scientist is in). Do not write outside it.
@@ -128,16 +180,17 @@ The scientist should never have to specify `sample_type` if you can figure it ou
 The scientist's bar should be: drop a folder in `incoming/`, say "analyze it" with at most a folder hint. The agent does the rest. Asking "what sample type?" when it's `VLP17_*.dm4` files is a failure mode — don't.
 
 ### "Compare to my hand measurements"
-Phase 1 doesn't have a paired-comparison tool yet. Until it does:
-1. Run `run()` if not already done.
-2. Read the hand CSV. Compute per-image (or per-batch) hand mean ± std and compare to script `capsid_mean_nm`.
-3. Report `delta = hand_mean − script_mean` and how it stacks up to prior comparisons in `LAB_NOTEBOOK.md`.
+1. Add the hand CSV to the reference (with the same `batch_id` as the run): `add_hand(...)`.
+2. Re-evaluate the run: `evaluate(run_dir)` — Hand vs script section will now populate.
+3. Quote the resulting delta back. If it sits well outside historical hand-vs-script deltas in `reference_hand.csv` for that subtype, flag it.
 
-### "Add this run to the gold standard"
-Not yet implemented. Direct the user to design choices documented in the lab notebook ("Implications for the data-analysis agent" section) and propose appending a row by hand to `benchmarks/<sample_type>/gold_standard.csv` when that file exists.
+### "Add this run to the reference"
+1. Confirm the scientist actually wants this run promoted (it's a deliberate decision, not a default).
+2. Call `add_to_reference.add_run(run_dir, sample_type, approver, notes)`.
+3. If `DuplicateReferenceError` fires, surface the colliding rows verbatim. Ask the scientist whether to replace (`force=True`) or skip.
 
 ### "Did the script regress?"
-Not yet implemented. Until then, eyeball: re-run on a representative subset of `benchmarks/<sample_type>/` and confirm the per-image numbers match the gold-standard CSV within ~0.2 nm.
+Re-run measurement on the images already represented in `reference_runs.csv` (group by `batch_id`, find the source images, re-run). Then compare new `per_image` rows to the reference rows for those images. Differences > ~0.3 nm in capsid_median are regressions worth surfacing.
 
 ## Output discipline
 
