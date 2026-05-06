@@ -32,11 +32,20 @@ Usage:
 """
 
 import argparse
+import os
 import queue
 import sys
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+# Make `from analysis...` resolve when this script is invoked directly by
+# path (e.g. `python /path/to/bmv_measure.py …`). Without this, sys.path[0]
+# is the script's own directory and the analysis package isn't visible.
+# `python -m analysis.bmv_measure` doesn't need this but it's harmless there.
+_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, _PACKAGE_ROOT)
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -883,8 +892,13 @@ def main() -> None:
                                "histograms_path": str(hist_path),
                                "summary_md":      ""},
         }
-    except ImportError:
-        run_result = None  # standalone single-file use; skip summary + eval
+    except ImportError as exc:
+        # Should not happen with the sys.path fixup at the top of this file,
+        # but if a scientist drops just bmv_measure.py somewhere without the
+        # analysis package alongside it, fall back gracefully.
+        print(f"\n  (running in single-file standalone mode — SUMMARY.md and "
+              f"eval skipped; reason: {exc})", file=sys.stderr)
+        run_result = None
 
     # Auto-eval against benchmarks/bmv/ (if available).
     if run_result is not None:
