@@ -866,11 +866,10 @@ def main() -> None:
     # Auto-eval against benchmarks/bmv/ (if available). Wrapped in try/except
     # so this script remains usable as a single-file standalone — drop alone
     # next to images and it still measures.
+    # Build a run-result dict so we can reuse the VLP summary writer + eval pipeline.
     try:
-        from analysis.eval import evaluate  # noqa: WPS433
-        # Build a minimal run-result dict from the CSV we just wrote.
         from analysis.vlp_measure_v2 import (  # noqa: WPS433
-            _per_image_summary, _overall_summary, _script_version_with_tunables,
+            _per_image_summary, _overall_summary, _write_summary_md,
         )
         run_result = {
             "sample_type":    "BMV",
@@ -878,20 +877,41 @@ def main() -> None:
             "script_version": "bmv_measure@1.0",
             "summary":        _overall_summary(results),
             "per_image":      _per_image_summary(results),
-            "outputs":        {"run_dir": str(args.out),
-                               "summary_md": str(args.out / "SUMMARY.md")},
+            "outputs":        {"run_dir":         str(args.out),
+                               "csv_path":        str(csv_path),
+                               "overlays_dir":    str(args.out / "overlays"),
+                               "histograms_path": str(hist_path),
+                               "summary_md":      ""},
         }
-        ev = evaluate(run_result, sample_type="BMV", write_report=True)
-        print(f"\n  Eval → {ev.get('report_path', '(no report)')}")
-        print(f"        warnings: {ev['n_warns_total']} across {ev['n_images']} image(s)")
-        if ev["hand_vs_script"]:
-            H = ev["hand_vs_script"]
-            print(f"        hand vs script: Δ capsid {H['delta_capsid_nm']:+.2f} nm "
-                  f"(hand n={H['n_hand_particles']})")
-    except (ImportError, FileNotFoundError):
-        pass  # standalone use, or no benchmarks/bmv/ seeded yet
-    except Exception as exc:  # pragma: no cover (defensive)
-        print(f"  (eval skipped: {exc})", file=sys.stderr)
+    except ImportError:
+        run_result = None  # standalone single-file use; skip summary + eval
+
+    # Auto-eval against benchmarks/bmv/ (if available).
+    if run_result is not None:
+        try:
+            from analysis.eval import evaluate  # noqa: WPS433
+            ev = evaluate(run_result, sample_type="BMV", write_report=True)
+            run_result["eval"] = {
+                "n_warns_total":  ev["n_warns_total"],
+                "n_ref_runs":     ev["n_ref_runs"],
+                "hand_vs_script": ev["hand_vs_script"],
+                "report_path":    ev.get("report_path"),
+            }
+            print(f"\n  Eval → {ev.get('report_path', '(no report)')}")
+            print(f"        warnings: {ev['n_warns_total']} across {ev['n_images']} image(s)")
+            if ev["hand_vs_script"]:
+                H = ev["hand_vs_script"]
+                print(f"        hand vs script: Δ capsid {H['delta_capsid_nm']:+.2f} nm "
+                      f"(hand n={H['n_hand_particles']})")
+        except FileNotFoundError:
+            run_result["eval"] = {"skipped": "no reference_runs.csv found"}
+        except Exception as exc:  # pragma: no cover (defensive)
+            run_result["eval"] = {"skipped": f"eval error: {exc}"}
+            print(f"  (eval skipped: {exc})", file=sys.stderr)
+
+        # SUMMARY.md last so the eval block can be folded in.
+        summary_md_path = _write_summary_md(args.out, run_result)
+        print(f"  SUMMARY.md → {summary_md_path}")
 
 
 if __name__ == "__main__":

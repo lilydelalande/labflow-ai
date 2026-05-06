@@ -590,8 +590,14 @@ def _overall_summary(results: pd.DataFrame) -> dict:
 
 
 def _write_summary_md(out_dir: Path, result: dict) -> Path:
-    """Persistent human + agent-readable summary. Solves stdout-burial."""
+    """Persistent human + agent-readable summary. Solves stdout-burial.
+    Works for both VLP (gold + capsid) and BMV (capsid only) — gold lines
+    only appear when gold_mean_nm is present."""
     s = result["summary"]
+    has_gold = isinstance(s.get("gold_mean_nm"), (int, float)) and not (
+        isinstance(s.get("gold_mean_nm"), float) and np.isnan(s["gold_mean_nm"])
+    )
+    detection_label = "gold detections" if has_gold else "particle detections"
     md = [
         f"# Measurement run — {result['sample_type']}",
         "",
@@ -600,17 +606,21 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
         f"- **Run dir:** `{result['outputs']['run_dir']}`",
         "",
         "## Headline",
-        f"- {s['n_images']} images, {s['n_gold_total']} gold detections",
+        f"- {s['n_images']} images, {s['n_gold_total']} {detection_label}",
         f"- **{s['n_reliable']} reliable** ({(1-s['drop_rate'])*100:.1f}%) "
         f"— {s['n_dropped']} dropped ({s['drop_rate']*100:.1f}%)",
     ]
     if s.get("n_reliable", 0):
-        md += [
-            f"- **Gold:** mean {s['gold_mean_nm']:.2f} ± {s['gold_std_nm']:.2f} nm "
-            f"(median {s['gold_median_nm']:.2f})",
+        if has_gold:
+            md.append(
+                f"- **Gold:** mean {s['gold_mean_nm']:.2f} ± {s['gold_std_nm']:.2f} nm "
+                f"(median {s['gold_median_nm']:.2f})"
+            )
+        md.append(
             f"- **Capsid:** mean {s['capsid_mean_nm']:.2f} ± {s['capsid_std_nm']:.2f} nm "
-            f"(median {s['capsid_median_nm']:.2f})",
-        ]
+            f"(median {s['capsid_median_nm']:.2f})"
+        )
+
     # Eval headline (only if eval ran)
     ev = result.get("eval") or {}
     if ev and "skipped" not in ev:
@@ -622,36 +632,52 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
                   f"**{n_warns} warning(s)**")
         H = ev.get("hand_vs_script")
         if H is None:
-            md.append("- Hand vs script: no hand measurements registered for this batch")
+            md.append("- Hand vs script: no hand measurements in `<run_dir>/hand/`")
         else:
             md.append(f"- Hand vs script: "
                       f"Δ capsid **{H['delta_capsid_nm']:+.2f} nm** "
-                      f"(hand n={H['hand_n']}; "
-                      f"hand source: {H['hand_source']})")
+                      f"(hand n={H.get('n_hand_particles', H.get('hand_n', '?'))})")
         if ev.get("report_path"):
             md.append(f"- Full report: `{ev['report_path']}`")
     elif ev.get("skipped"):
         md.append("")
         md.append(f"## Eval\n- Skipped: {ev['skipped']}")
 
+    md += ["", "## Outputs", f"- CSV: `{result['outputs']['csv_path']}`"]
+    for label, key in [("Overlays", "overlays_dir"),
+                       ("Histograms", "histograms_path"),
+                       ("Scatter", "scatter_path")]:
+        path = result["outputs"].get(key)
+        if path:
+            md.append(f"- {label}: `{path}`")
+
     md += [
         "",
-        "## Outputs",
-        f"- CSV: `{result['outputs']['csv_path']}`",
-        f"- Overlays: `{result['outputs']['overlays_dir']}`",
-        f"- Histograms: `{result['outputs']['histograms_path']}`",
-        f"- Scatter: `{result['outputs']['scatter_path']}`",
-        "",
         "## Per-image",
-        "| filename | n_gold | n_reliable | reliable% | wall_fit% | gold med (nm) | capsid med (nm) |",
-        "|---|---|---|---|---|---|---|",
     ]
+    if has_gold:
+        md += [
+            "| filename | n_gold | n_reliable | reliable% | wall_fit% | gold med (nm) | capsid med (nm) |",
+            "|---|---|---|---|---|---|---|",
+        ]
+    else:
+        md += [
+            "| filename | n_detections | n_reliable | reliable% | wall_fit% | capsid med (nm) |",
+            "|---|---|---|---|---|---|",
+        ]
     for r in result["per_image"]:
-        md.append(
-            f"| {r['filename']} | {r['n_gold']} | {r['n_reliable']} | "
-            f"{r['reliable_rate']*100:.0f}% | {r['wall_fit_success_rate']*100:.0f}% | "
-            f"{r['gold_median_nm']:.2f} | {r['capsid_median_nm']:.2f} |"
-        )
+        if has_gold:
+            md.append(
+                f"| {r['filename']} | {r['n_gold']} | {r['n_reliable']} | "
+                f"{r['reliable_rate']*100:.0f}% | {r['wall_fit_success_rate']*100:.0f}% | "
+                f"{r['gold_median_nm']:.2f} | {r['capsid_median_nm']:.2f} |"
+            )
+        else:
+            md.append(
+                f"| {r['filename']} | {r['n_gold']} | {r['n_reliable']} | "
+                f"{r['reliable_rate']*100:.0f}% | {r['wall_fit_success_rate']*100:.0f}% | "
+                f"{r['capsid_median_nm']:.2f} |"
+            )
     path = out_dir / "SUMMARY.md"
     path.write_text("\n".join(md) + "\n")
     return path
