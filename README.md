@@ -23,9 +23,37 @@ The whole stack works equally well via plain CLI (a scientist running scripts di
 | `incoming/` | *(convention)* DM3 dump location for new sample batches. |
 | `results/` | Per-run outputs: CSVs, overlays, plots, `SUMMARY.md`, `eval_report.md`. |
 
-## Single-file usage (zero setup)
+## Three install paths (pick whichever matches how you work)
 
-`analysis/vlp_measure_v2.py` has no internal dependencies on other lab files — just standard scientific Python (`numpy`, `pandas`, `matplotlib`, `scikit-image`, `scipy`, `ncempy`, `tqdm`). If you only want VLP measurement and don't need the eval / benchmarks / agent layers, drop the file alongside a folder of images and run:
+### 1. Agent-driven install — the easiest path, no shell knowledge required
+
+If you use Claude Code or Codex (CLI or desktop), you don't need to know `curl` or `bash`. Just give the agent the one file it reads at session start:
+
+1. Make a fresh empty folder where you want to do TEM analysis.
+2. Save the agent context file into it. Open https://github.com/lilydelalande/labflow-ai/blob/main/CLAUDE.md in your browser, click *Raw*, and save into your folder as:
+   - `CLAUDE.md` — if you use Claude Code
+   - `AGENTS.md` — if you use Codex (it's the same file content, just under a different name)
+
+   (Or, from the terminal, `curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/CLAUDE.md -o <CLAUDE.md or AGENTS.md>`.)
+3. Open Claude Code or Codex in that folder and say *hi*.
+4. The agent reads the context file, notices the analysis tools aren't installed, asks for your permission, and runs the bootstrap itself.
+
+After that, drop your DM3s into `incoming/<batch_name>/` and ask the agent to analyze them.
+
+### 2. Manual install — for technical users who prefer doing it themselves
+
+```bash
+cd ~/my-tem-project
+curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
+```
+
+This clones the repo into a hidden `.labflow/` cache, symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory, copies `CLAUDE.md` (and symlinks `AGENTS.md` to it), gitignores the cache + data folders, runs `uv sync` to install Python deps, and creates empty `incoming/` and `results/` folders.
+
+To update later: re-run the same one-liner — it's safe to re-run.
+
+### 3. Single-file usage — just the measurement script, no agent or benchmarks
+
+`analysis/vlp_measure_v2.py` is self-contained. If you only want VLP measurement and don't need eval / benchmarks / agent layers, drop the file alongside a folder of images and run:
 
 ```bash
 mkdir my-tem-project && cd my-tem-project
@@ -35,30 +63,15 @@ mv ~/my-images.zip . && unzip my-images.zip   # or however your DM3s arrive
 uv run python vlp_measure_v2.py my-images/ --workers 6
 ```
 
-Outputs land in `results/vlp_v2/`. The eval auto-import skips silently when the broader stack isn't around.
+Outputs land in `results/vlp_v2/` (the script creates the folder if it doesn't exist; you don't need to make it yourself). The eval auto-import skips silently when the broader stack isn't around.
 
-## Installing the stack into a new lab repo
+---
 
-For a scientist setting up TEM analysis in a fresh directory:
-
-```bash
-cd ~/my-tem-project
-curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
-```
-
-This:
-1. Clones labflow-ai into a hidden `.labflow/` cache (gitignored)
-2. Symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory
-3. Copies `CLAUDE.md` (so the scientist can edit it locally)
-4. Pins the install to the current upstream SHA in `.labflow/INSTALLED_SHA`
-
-After that, the scientist can drop DM3s into `incoming/<batch>/` and either:
+After any of paths 1 or 2, the scientist's daily flow is the same: drop DM3s into `incoming/<batch>/`, then either:
 - **Talk to Claude / Codex:** "analyze the new images" — the lab-pipeline skill takes over
 - **Run scripts directly from terminal:** `uv run python -m analysis.vlp_measure_v2 incoming/<batch> --workers 6`
 
-Both paths produce the same outputs: CSV, overlays, plots, `SUMMARY.md`.
-
-To update later: `cd .labflow && git pull && cd .. && .labflow/bootstrap.sh --relink` (or just re-run the curl one-liner — it's idempotent).
+Both produce the same outputs: CSV, overlays, plots, `SUMMARY.md`, and `eval_report.md`.
 
 ## Running a measurement (programmatic vs CLI)
 
