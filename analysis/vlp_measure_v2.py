@@ -539,7 +539,9 @@ def save_scatter(df_all: pd.DataFrame, out_path: Path) -> None:
 # ── Per-image / overall summary builders ─────────────────────────────────────
 
 def _per_image_summary(results: pd.DataFrame) -> list[dict]:
-    """One dict per input image. Dimensionless + diameter stats for downstream eval."""
+    """One dict per input image. Dimensionless + diameter stats for downstream eval.
+    Works for both VLP (gold + capsid) and BMV (capsid only) measurement CSVs."""
+    has_gold = "gold_diameter_nm" in results.columns
     out: list[dict] = []
     for fname, sub in results.groupby("file", sort=True):
         rel = sub[sub["is_reliable"]]
@@ -555,9 +557,10 @@ def _per_image_summary(results: pd.DataFrame) -> list[dict]:
             "wall_fit_success_rate": (n_wall / n_gold) if n_gold else 0.0,
             "reliable_rate":         (n_rel  / n_gold) if n_gold else 0.0,
             "drop_rate":             ((n_gold - n_rel) / n_gold) if n_gold else 0.0,
-            "gold_median_nm":        float(rel["gold_diameter_nm"].median())   if n_rel else float("nan"),
-            "gold_std_nm":           float(rel["gold_diameter_nm"].std())      if n_rel >= 2 else float("nan"),
-            "capsid_median_nm":      float(rel["capsid_diameter_nm"].median()) if n_rel else float("nan"),
+            "gold_median_nm":        float(rel["gold_diameter_nm"].median())   if (has_gold and n_rel)     else float("nan"),
+            "gold_std_nm":           float(rel["gold_diameter_nm"].std())      if (has_gold and n_rel >= 2) else float("nan"),
+            "capsid_mean_nm":        float(rel["capsid_diameter_nm"].mean())   if n_rel     else float("nan"),
+            "capsid_median_nm":      float(rel["capsid_diameter_nm"].median()) if n_rel     else float("nan"),
             "capsid_std_nm":         float(rel["capsid_diameter_nm"].std())    if n_rel >= 2 else float("nan"),
             "median_wall_cv":        float(wall_cv.median())                   if len(wall_cv) else float("nan"),
             "iqr_wall_cv":           float(wall_cv.quantile(0.75) - wall_cv.quantile(0.25)) if len(wall_cv) >= 2 else float("nan"),
@@ -566,6 +569,8 @@ def _per_image_summary(results: pd.DataFrame) -> list[dict]:
 
 
 def _overall_summary(results: pd.DataFrame) -> dict:
+    """Overall headline. Works for VLP (gold + capsid) and BMV (capsid only)."""
+    has_gold = "gold_diameter_nm" in results.columns
     rel = results[results["is_reliable"]]
     n_gold = int(len(results))
     n_rel  = int(len(rel))
@@ -575,12 +580,12 @@ def _overall_summary(results: pd.DataFrame) -> dict:
         "n_reliable":   n_rel,
         "n_dropped":    n_gold - n_rel,
         "drop_rate":    ((n_gold - n_rel) / n_gold) if n_gold else 0.0,
-        "gold_mean_nm":   float(rel["gold_diameter_nm"].mean())   if n_rel else float("nan"),
-        "gold_std_nm":    float(rel["gold_diameter_nm"].std())    if n_rel >= 2 else float("nan"),
-        "gold_median_nm": float(rel["gold_diameter_nm"].median()) if n_rel else float("nan"),
-        "capsid_mean_nm":   float(rel["capsid_diameter_nm"].mean())   if n_rel else float("nan"),
+        "gold_mean_nm":   float(rel["gold_diameter_nm"].mean())   if (has_gold and n_rel)     else float("nan"),
+        "gold_std_nm":    float(rel["gold_diameter_nm"].std())    if (has_gold and n_rel >= 2) else float("nan"),
+        "gold_median_nm": float(rel["gold_diameter_nm"].median()) if (has_gold and n_rel)     else float("nan"),
+        "capsid_mean_nm":   float(rel["capsid_diameter_nm"].mean())   if n_rel     else float("nan"),
         "capsid_std_nm":    float(rel["capsid_diameter_nm"].std())    if n_rel >= 2 else float("nan"),
-        "capsid_median_nm": float(rel["capsid_diameter_nm"].median()) if n_rel else float("nan"),
+        "capsid_median_nm": float(rel["capsid_diameter_nm"].median()) if n_rel     else float("nan"),
     }
 
 
