@@ -2,123 +2,77 @@
 
 TEM image-analysis co-scientist for a biology lab. Automates particle measurement (gold NPs, virus capsids, capsomeres) from Gatan `.dm3`/`.dm4` images, with results trustworthy enough to replace or augment hand measurement in ImageJ.
 
-The whole stack works equally well via plain CLI (a scientist running scripts directly) and via Claude / Codex (an agent driving the same scripts conversationally). Claude is a convenience, never a dependency.
+The same stack works two ways: **drive it with Claude or Codex** (conversational), or **run the scripts yourself** (terminal). Pick whichever fits how you work.
 
-## What's here
+## Get started
 
-| | |
-|---|---|
-| `analysis/vlp_measure_v2.py` | VLP gold + capsid measurement. **Self-contained — drop just this file alongside images and run it.** Image loading, normalisation, gold detection, capsid wall fit, overlays, summary. |
-| `analysis/bmv_measure.py` | BMV / BOG capsid measurement (no gold anchor). Hough detection + WALL_DESCENT_FRAC wall fit. |
-| `analysis/plot_vlp_scatter.py` | Combined scatter / 2D-hist / KDE / pooled hist across multiple VLP samples. |
-| `analysis/plot_capsid_groups.py` | Per-image strip plot showing gold + capsid medians side-by-side. |
-| `analysis/eval.py` | Compares a measurement run against the reference benchmarks (per-image quality + hand vs script). |
-| `analysis/seed_benchmarks.py` | Initial seeder for `benchmarks/<sample_type>/`. |
-| `analysis/add_to_reference.py` | Manual gate for appending new approved runs / hand data into the benchmarks. |
-| `benchmarks/<sample_type>/` | `reference_runs.csv` (script outputs we trust) + `reference_hand.csv` (per-particle hand measurements). Eval compares new runs against these. |
-| `LAB_NOTEBOOK.md` | Decision log: every non-trivial measurement decision, with dates and reasons. Read this first when revisiting. |
-| `CLAUDE.md` | Co-scientist working principles + auto-bootstrap rule. Codex users: rename to `AGENTS.md` once after install (Codex reads only that name). |
-| `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. Tool surface, file conventions, scientist workflows. |
-| `bootstrap.sh` | One-shot installer for new scientist repos. |
-| `incoming/` | *(convention)* DM3 dump location for new sample batches. |
-| `results/` | Per-run outputs: CSVs, overlays, plots, `SUMMARY.md`, `eval_report.md`. |
+### With Claude or Codex
 
-## Three install paths (pick whichever matches how you work)
-
-### 1. Agent-driven install — the easiest path, no shell knowledge required
-
-If you use Claude Code or Codex (CLI or desktop), you don't need to know `curl` or `bash`. Just give the agent the one file it reads at session start:
-
-1. Make a fresh empty folder where you want to do TEM analysis.
-2. Download `CLAUDE.md` into it. From the terminal:
+1. Make a fresh empty folder.
+2. Download `CLAUDE.md` into it:
    ```bash
    curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/CLAUDE.md -o CLAUDE.md
    ```
-   Or in a browser: open https://github.com/lilydelalande/labflow-ai/blob/main/CLAUDE.md, click *Raw*, save as `CLAUDE.md` into your folder.
-3. **If you use Codex**, rename it: `mv CLAUDE.md AGENTS.md`. Codex reads only `AGENTS.md`. Claude Code users skip this step.
-4. Open Claude Code or Codex in that folder and say *hi*.
-5. The agent reads the context file, notices the analysis tools aren't installed, asks for your permission, and runs the bootstrap itself.
+   *Codex users:* `mv CLAUDE.md AGENTS.md` (Codex reads only `AGENTS.md`).
+3. Open Claude Code or Codex in that folder and say *hi*.
+4. The agent will detect the stack isn't installed yet, ask for permission, and run the bootstrap. Approve it.
 
-After that, drop your DM3s into `incoming/<batch_name>/` and ask the agent to analyze them.
+### On your own (no agent)
 
-### 2. Manual install — for technical users who prefer doing it themselves
+Two options. Both end in the same place.
 
+**Option A — clone the repo:**
 ```bash
-cd ~/my-tem-project
+git clone https://github.com/lilydelalande/labflow-ai
+cd labflow-ai
+uv sync
+```
+
+**Option B — run the bootstrap script** (same thing the agent runs, into a working directory of your choice):
+```bash
+mkdir my-tem-project && cd my-tem-project
 curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
 ```
 
-This clones the repo into a hidden `.labflow/` cache, symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory, copies `CLAUDE.md`, gitignores the cache + data folders, runs `uv sync` to install Python deps, and creates empty `incoming/` and `results/` folders. (Codex users: `mv CLAUDE.md AGENTS.md` once after install.)
+Both give you the same setup: `analysis/`, `benchmarks/`, the lab-pipeline skill, dependencies installed, `incoming/` and `results/` ready for data. To update later: `git pull` (Option A) or re-run the curl one-liner (Option B). Both are idempotent.
 
-To update later: re-run the same one-liner — it's safe to re-run.
+## Daily flow
 
-### 3. Single-file usage — just the measurement script, no agent or benchmarks
+Drop DM3 / DM4 files into `incoming/<sample_name>/` (the folder name becomes the run identifier). Then either:
 
-`analysis/vlp_measure_v2.py` is self-contained. If you only want VLP measurement and don't need eval / benchmarks / agent layers, drop the file alongside a folder of images and run:
+- **Talk to the agent:** "analyze the new images in incoming/foo" — the lab-pipeline skill takes over.
+- **Run a script yourself:** `uv run python -m analysis.vlp_measure_v2 incoming/foo --workers 6` (or `analysis.bmv_measure` for BMV).
 
-```bash
-mkdir my-tem-project && cd my-tem-project
-curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/analysis/vlp_measure_v2.py -o vlp_measure_v2.py
-uv init && uv add ncempy pandas matplotlib scipy scikit-image tqdm
-mv ~/my-images.zip . && unzip my-images.zip   # or however your DM3s arrive
-uv run python vlp_measure_v2.py my-images/ --workers 6
-```
+Outputs land in `results/<sample_name>/`. By convention input and output folder names match.
 
-Outputs land in `results/vlp_v2/` (the script creates the folder if it doesn't exist; you don't need to make it yourself). The eval auto-import skips silently when the broader stack isn't around.
-
----
-
-After any of paths 1 or 2, the scientist's daily flow is the same: drop DM3s into `incoming/<batch>/`, then either:
-- **Talk to Claude / Codex:** "analyze the new images" — the lab-pipeline skill takes over
-- **Run scripts directly from terminal:** `uv run python -m analysis.vlp_measure_v2 incoming/<batch> --workers 6`
-
-Both produce the same outputs: CSV, overlays, plots, `SUMMARY.md`, and `eval_report.md`.
-
-## Running a measurement (programmatic vs CLI)
-
-**Programmatic — preferred when an agent is driving:**
-
-```python
-from analysis.vlp_measure_v2 import run
-
-result = run(
-    image_path="incoming/2026-05-15_VLP17_batch4",
-    sample_type="VLP",
-    out_dir="results/vlp17_batch4",
-    workers=6,
-)
-print(result["summary"])  # n_reliable, gold/capsid mean ± std, drop rate, …
-```
-
-**CLI — preferred when a human is driving:**
-
-```bash
-uv run python -m analysis.vlp_measure_v2 "incoming/2026-05-15_VLP17_batch4" \
-    --sample-type VLP --out results/vlp17_batch4 --workers 6
-```
-
-Both produce, inside the directory passed as `out_dir` (or `--out`):
+## What a run produces
 
 ```
-results/<batch_name>/
+results/<sample_name>/
 ├── SUMMARY.md            # headline + per-image table — read this first
-├── vlp_measurements.csv  # one row per detected gold NP, with per-particle metrics
-├── vlp_histograms.png    # gold + capsid distributions
-├── vlp_scatter.png       # gold-vs-capsid scatter
-└── overlays/
-    ├── VLP17_0001_overlay.png
-    └── …                 # one per input image, raw on left, detections on right
+├── eval_report.md        # quality + hand-vs-script (when benchmarks/<sample_type>/ exists)
+├── vlp_measurements.csv  # one row per detected particle  (BMV: bmv_measurements.csv)
+├── vlp_histograms.png    # gold + capsid distributions    (BMV: bmv_histogram.png)
+├── vlp_scatter.png       # gold-vs-capsid scatter         (BMV: omitted)
+└── overlays/             # per-image PNG; raw on left, detections on right
 ```
 
-All paths in the dict returned by `run()` are absolute and point inside `out_dir`. By convention, mirror the incoming folder name: `incoming/foo_batch/` → `out_dir=results/foo_batch/`. `out_dir` is created if it doesn't exist.
+To enable the script-vs-hand comparison in `eval_report.md`, drop your ImageJ-exported CSV into `results/<sample_name>/hand/` (any filename) — eval reads it on the next run.
+
+## Sample types
+
+| `sample_type` | example samples | anchors on | script |
+|---|---|---|---|
+| `VLP` | VLP17, VLP20, VLP_100, bare gold NPs | Gold NP (near-black, circular) | `analysis/vlp_measure_v2.py` |
+| `BMV` | BMV, BOG | Bright protein ring + dark stain pool (donut signature) | `analysis/bmv_measure.py` |
+
+Sample classification from a raw image is **not yet automated** — the scientist supplies the sample type, or the agent infers it from filenames.
 
 ## CLI reference (all scripts, all flags)
 
-Every script in `analysis/` is invocable directly. Canonical form is `uv run python -m analysis.<name>` (works from any cwd as long as you're in a labflow-ai repo). Direct-path form `uv run python /path/to/analysis/<name>.py` also works for the measurement scripts.
+Every script in `analysis/` is invocable directly. Canonical form is `uv run python -m analysis.<name>`.
 
-### Measurement scripts
-
-#### `analysis.vlp_measure_v2` — VLP gold + capsid measurement
+### `analysis.vlp_measure_v2` — VLP gold + capsid measurement
 
 ```bash
 uv run python -m analysis.vlp_measure_v2 <image_path> [flags]
@@ -128,17 +82,16 @@ uv run python -m analysis.vlp_measure_v2 <image_path> [flags]
 |---|---|---|
 | `image_path` (positional) | required | A `.dm3`/`.dm4` file or a folder of them |
 | `--pattern` | `*` | Glob when `image_path` is a folder |
-| `--out` | `results/vlp_v2` | Output directory (`SUMMARY.md`, CSV, overlays, etc. land here) |
-| `--sample-type` | `VLP` | Sample type for routing eval — leave at default for VLPs |
+| `--out` | `results/vlp_v2` | Output directory |
 | `--sample-name` | folder name | Override the auto-derived sample name |
 | `--workers` | `4` | Parallel worker processes |
 | `--gold-threshold` | auto (Otsu) | Override the per-image gold-detection intensity cutoff |
 | `--min-gold-nm` | `7.0` | Lower size cutoff for gold detection |
 | `--max-gold-nm` | `30.0` | Upper size cutoff for gold detection |
 | `--show-flagged` | off | Also draw flagged-unreliable circles in the overlay (tomato) |
-| `--gui` | off | Pop a Tk progress window (closing it doesn't stop the run) |
+| `--gui` | off | Pop a Tk progress window |
 
-#### `analysis.bmv_measure` — BMV / BOG capsid measurement (no gold anchor)
+### `analysis.bmv_measure` — BMV / BOG capsid measurement
 
 ```bash
 uv run python -m analysis.bmv_measure <image_path> [flags]
@@ -149,16 +102,14 @@ uv run python -m analysis.bmv_measure <image_path> [flags]
 | `image_path` (positional) | required | A `.dm3`/`.dm4` file or a folder of them |
 | `--pattern` | `*` | Glob when `image_path` is a folder |
 | `--out` | `results/bmv` | Output directory |
-| `--expected-nm` | `28.0` | Expected capsid diameter in nm — Hough searches around this |
+| `--expected-nm` | `28.0` | Expected capsid diameter (Hough searches around this) |
 | `--workers` | `4` | Parallel worker processes |
 | `--show-flagged` | off | Draw flagged (tomato) and no-fit (magenta) circles in overlay |
 | `--debug` | off | Save radial profile plots for a sample of particles |
 | `--debug-indices N1 N2 …` | random sample | Specific particle indices to plot in debug mode |
 | `--gui` | off | Pop a Tk progress window |
 
-### Eval
-
-#### `analysis.eval` — compare a run to the reference benchmarks
+### `analysis.eval` — compare a run to the reference benchmarks
 
 ```bash
 uv run python -m analysis.eval <run_dir> [flags]
@@ -167,22 +118,11 @@ uv run python -m analysis.eval <run_dir> [flags]
 | flag | default | what it does |
 |---|---|---|
 | `run_dir` (positional) | required | Directory with the measurement CSV (e.g. `results/<sample>`) |
-| `--sample-type` | `VLP` | `VLP` or `BMV` — decides which benchmarks dir + which metrics get gated |
-| `--benchmarks-dir` | `benchmarks/` | Override location of reference CSVs |
+| `--sample-type` | `VLP` | `VLP` or `BMV` |
 | `--no-report` | off | Skip writing `eval_report.md`; still returns the eval dict |
-| `--json` | off | Print full result as JSON instead of the headline |
+| `--json` | off | Print full result as JSON |
 
-### Reference-set management (manual gate)
-
-#### `analysis.seed_benchmarks` — one-shot initial seed
-
-```bash
-uv run python -m analysis.seed_benchmarks
-```
-
-No flags. Reads `results/vlp17_v2/`, `results/vlp20_v2/`, `results/vlp100_v2/`, and `results/bmv/`, writes `benchmarks/<sample_type>/{reference_runs,reference_hand}.csv`. Re-running overwrites — use `add_to_reference` for incremental growth instead.
-
-#### `analysis.add_to_reference run` — append a run to `reference_runs.csv`
+### `analysis.add_to_reference run` — append a run to `reference_runs.csv`
 
 ```bash
 uv run python -m analysis.add_to_reference run <run_dir> --approver <name> [flags]
@@ -190,15 +130,14 @@ uv run python -m analysis.add_to_reference run <run_dir> --approver <name> [flag
 
 | flag | default | what it does |
 |---|---|---|
-| `run_dir` (positional) | required | Directory with `vlp_measurements.csv` or `bmv_measurements.csv` |
+| `run_dir` (positional) | required | Directory with the measurement CSV |
 | `--sample-type` | `VLP` | `VLP` or `BMV` |
 | `--sample-name` | folder name | Override the auto-derived sample name |
 | `--approver` | required | Person approving this run (audit trail) |
 | `--notes` | empty | Free-form note explaining why this run is reference-worthy |
-| `--force` | off | Replace existing rows on `(sample_name, filename)` collision instead of refusing |
-| `--benchmarks-dir` | `benchmarks/` | Override target directory |
+| `--force` | off | Replace existing rows on `(sample_name, filename)` collision |
 
-#### `analysis.add_to_reference hand` — append hand measurements to `reference_hand.csv`
+### `analysis.add_to_reference hand` — append hand measurements to `reference_hand.csv`
 
 ```bash
 uv run python -m analysis.add_to_reference hand <hand_csv> --sample-name <name> --scientist <name> [flags]
@@ -206,20 +145,24 @@ uv run python -m analysis.add_to_reference hand <hand_csv> --sample-name <name> 
 
 | flag | default | what it does |
 |---|---|---|
-| `hand_csv` (positional) | required | ImageJ-exported CSV (paired gold+capsid for VLP, single column for BMV) |
+| `hand_csv` (positional) | required | ImageJ-exported CSV |
 | `--sample-name` | required | Identifier shared with the script run this hand data validates |
 | `--sample-type` | `VLP` | `VLP` or `BMV` |
 | `--unit` | `um` | Length unit in source CSV: `um` or `nm` |
 | `--scientist` | required | Person who hand-measured (audit trail) |
 | `--measure-date` | today | ISO date when measurements were taken |
-| `--notes` | empty | Free-form note |
 | `--run-dir` | none | Also copy the hand CSV into `<run-dir>/hand/` so per-batch eval picks it up |
 | `--force` | off | Replace existing rows on `(sample_name, source_file)` collision |
-| `--benchmarks-dir` | `benchmarks/` | Override target directory |
 
-### Plotting helpers
+### `analysis.seed_benchmarks` — initial seed (no flags)
 
-#### `analysis.plot_vlp_scatter` — combined scatter / 2D-hist / KDE / pooled hist
+```bash
+uv run python -m analysis.seed_benchmarks
+```
+
+One-shot. Reads existing run directories under `results/` and writes `benchmarks/<sample_type>/{reference_runs,reference_hand}.csv`. Re-running overwrites — use `add_to_reference` for incremental growth.
+
+### `analysis.plot_vlp_scatter` — combined scatter / 2D-hist / KDE / pooled hist
 
 ```bash
 uv run python -m analysis.plot_vlp_scatter <csv> [<csv> …] [flags]
@@ -229,10 +172,9 @@ uv run python -m analysis.plot_vlp_scatter <csv> [<csv> …] [flags]
 |---|---|---|
 | `csvs` (positional, ≥1) | required | One or more `vlp_measurements.csv` files |
 | `--out-dir` | first CSV's folder | Where the combined plots land |
-| `--reliable-only` | on | Plot only reliable detections (default behavior) |
 | `--combined-hist2d` | off | One pooled 2D histogram instead of per-sample subplots |
 
-#### `analysis.plot_capsid_groups` — per-image strip plot, gold + capsid medians side-by-side
+### `analysis.plot_capsid_groups` — per-image strip plot
 
 ```bash
 uv run python -m analysis.plot_capsid_groups <csv> [flags]
@@ -243,19 +185,18 @@ uv run python -m analysis.plot_capsid_groups <csv> [flags]
 | `csv` (positional) | required | A `vlp_measurements.csv` |
 | `--out` | CSV's folder | Where `capsid_groups.png` lands |
 
-## Data model
+## Repo contents
 
-- `incoming/<batch_name>/` — DM3/DM4 dump, one folder per imaging session/grid.
-- `results/<batch_name>/` — measurement outputs. Mirrors the incoming folder name 1:1.
-- `LAB_NOTEBOOK.md` — append-only log of substantive decisions.
-
-Planned (designed in `LAB_NOTEBOOK.md`, not yet implemented):
-
-- `benchmarks/<sample_type>/gold_standard.csv` — curated approved runs (manual gate).
-- `benchmarks/<sample_type>/hand_measurements.csv` — per-particle hand data, joined to runs by `batch_id`.
-- `analysis/eval.py` — script-vs-gold-script + script-vs-hand comparison engine.
-- `analysis/approve.py` — manual gate for promoting a run into the gold-standard set.
-- `analysis/validate_script.py` — re-run on the gold standard after a script change to catch regressions.
+| | |
+|---|---|
+| `analysis/` | Measurement, eval, plotting, reference-set management. |
+| `benchmarks/<sample_type>/` | `reference_runs.csv` (script outputs we trust) + `reference_hand.csv` (per-particle hand measurements). |
+| `incoming/` | DM3 dump location (gitignored in scientist repos). |
+| `results/` | Per-run outputs (gitignored in scientist repos). |
+| `LAB_NOTEBOOK.md` | Decision log: every non-trivial measurement decision, with dates and reasons. |
+| `CLAUDE.md` | Co-scientist working principles + auto-bootstrap rule. Codex users: rename to `AGENTS.md`. |
+| `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. |
+| `bootstrap.sh` | One-shot installer for new scientist repos. |
 
 ## Working principles
 
@@ -267,19 +208,6 @@ See `CLAUDE.md` for the full list. Non-negotiables:
 4. **Declare physical scales in nm**, convert to pixels per-image.
 5. **Surface anomalies** — 100% detection rates, step changes, outliers. Print and flag.
 
-## Sample types
+## Planned but not built
 
-| Sample | Anchors on | Script |
-|---|---|---|
-| VLPs (gold-NP-cored) — VLP17, VLP20, VLP_100 | Gold NP (near-black, circular) | `analysis/vlp_measure_v2.py` |
-| Bare gold NPs | Gold NP | `analysis/vlp_measure_v2.py` (gold path only) |
-| BMV / BOG (no gold) | Bright protein ring, dark stain pool | `analysis/bmv_measure.py` |
-
-Sample classification from a raw image is **not yet automated** — the scientist supplies it.
-
-## Setup (development on this repo itself)
-
-```bash
-uv sync                                                   # install dependencies
-uv run python -m analysis.vlp_measure_v2 --help          # verify install
-```
+- `analysis/validate_script.py` — re-run the script on every image in `reference_runs.csv` after a script change; flag any image whose new measurement differs by more than tolerance from the recorded reference. The regression-test for the measurement pipeline itself.
