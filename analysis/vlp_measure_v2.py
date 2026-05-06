@@ -590,7 +590,7 @@ def _write_summary_md(out_dir: Path, result: dict) -> Path:
     md = [
         f"# Measurement run — {result['sample_type']}",
         "",
-        f"- **Batch:** `{result['batch_id'] or '(none)'}`",
+        f"- **Sample:** `{result['sample_name'] or '(none)'}`",
         f"- **Script:** `{result['script_version']}`",
         f"- **Run dir:** `{result['outputs']['run_dir']}`",
         "",
@@ -658,7 +658,7 @@ def run(
     image_path: str | Path,
     *,
     sample_type: str = "VLP",
-    batch_id: str | None = None,
+    sample_name: str | None = None,
     out_dir: str | Path = "results/vlp_v2",
     pattern: str = "*",
     gold_threshold: float | None = None,
@@ -671,21 +671,25 @@ def run(
     """
     Measure VLP gold + capsid across one or more .dm3/.dm4 files.
 
-    Returns a structured dict (see SUMMARY.md / docstring of _per_image_summary
-    and _overall_summary for the field list). Also writes:
+    `sample_name` defaults to the input folder's name (or, for a single file,
+    the filename stem + today's date). It's just a label — the script doesn't
+    interpret it; it's there so reports and reference rows are easy to track.
+
+    Returns a structured dict. Also writes:
       - `<out_dir>/vlp_measurements.csv` — per-particle results
       - `<out_dir>/overlays/` — per-image overlay PNGs
       - `<out_dir>/vlp_histograms.png`, `vlp_scatter.png`
       - `<out_dir>/SUMMARY.md` — human + agent-readable headline
+      - `<out_dir>/eval_report.md` — quality + hand-vs-script comparison (if benchmarks exist)
     """
     image_path = Path(image_path)
     out_dir    = Path(out_dir)
 
-    if batch_id is None:
+    if sample_name is None:
         if image_path.is_dir():
-            batch_id = image_path.name
+            sample_name = image_path.name
         else:
-            batch_id = f"{image_path.stem}_{_dt.date.today().isoformat()}"
+            sample_name = f"{image_path.stem}_{_dt.date.today().isoformat()}"
 
     if image_path.is_file():
         files = [image_path]
@@ -750,7 +754,7 @@ def run(
 
     result = {
         "sample_type":    sample_type,
-        "batch_id":       batch_id,
+        "sample_name":    sample_name,
         "script_version": _script_version_with_tunables(),
         "summary":        summary_overall,
         "per_image":      summary_per_img,
@@ -801,7 +805,8 @@ def main() -> None:
     parser.add_argument("--pattern", default="*")
     parser.add_argument("--out", type=Path, default=Path("results/vlp_v2"))
     parser.add_argument("--sample-type", default="VLP")
-    parser.add_argument("--batch-id", default=None)
+    parser.add_argument("--sample-name", default=None,
+                        help="Defaults to the folder name of image_path.")
 
     parser.add_argument("--gold-threshold", type=float, default=None,
                         help="Intensity cutoff for gold detection (default: auto per image)")
@@ -818,7 +823,7 @@ def main() -> None:
         result = run(
             image_path=args.image_path,
             sample_type=args.sample_type,
-            batch_id=args.batch_id,
+            sample_name=args.sample_name,
             out_dir=args.out,
             pattern=args.pattern,
             gold_threshold=args.gold_threshold,
