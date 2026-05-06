@@ -17,7 +17,7 @@ The whole stack works equally well via plain CLI (a scientist running scripts di
 | `analysis/add_to_reference.py` | Manual gate for appending new approved runs / hand data into the benchmarks. |
 | `benchmarks/<sample_type>/` | `reference_runs.csv` (script outputs we trust) + `reference_hand.csv` (per-particle hand measurements). Eval compares new runs against these. |
 | `LAB_NOTEBOOK.md` | Decision log: every non-trivial measurement decision, with dates and reasons. Read this first when revisiting. |
-| `CLAUDE.md` / `AGENTS.md` | Co-scientist working principles + auto-bootstrap rule for Claude / Codex. |
+| `CLAUDE.md` | Co-scientist working principles + auto-bootstrap rule. Codex users: rename to `AGENTS.md` once after install (Codex reads only that name). |
 | `.claude/skills/lab-pipeline/` | Project-scoped Claude Code skill. Tool surface, file conventions, scientist workflows. |
 | `bootstrap.sh` | One-shot installer for new scientist repos. |
 | `incoming/` | *(convention)* DM3 dump location for new sample batches. |
@@ -30,13 +30,14 @@ The whole stack works equally well via plain CLI (a scientist running scripts di
 If you use Claude Code or Codex (CLI or desktop), you don't need to know `curl` or `bash`. Just give the agent the one file it reads at session start:
 
 1. Make a fresh empty folder where you want to do TEM analysis.
-2. Save the agent context file into it. Open https://github.com/lilydelalande/labflow-ai/blob/main/CLAUDE.md in your browser, click *Raw*, and save into your folder as:
-   - `CLAUDE.md` — if you use Claude Code
-   - `AGENTS.md` — if you use Codex (it's the same file content, just under a different name)
-
-   (Or, from the terminal, `curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/CLAUDE.md -o <CLAUDE.md or AGENTS.md>`.)
-3. Open Claude Code or Codex in that folder and say *hi*.
-4. The agent reads the context file, notices the analysis tools aren't installed, asks for your permission, and runs the bootstrap itself.
+2. Download `CLAUDE.md` into it. From the terminal:
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/CLAUDE.md -o CLAUDE.md
+   ```
+   Or in a browser: open https://github.com/lilydelalande/labflow-ai/blob/main/CLAUDE.md, click *Raw*, save as `CLAUDE.md` into your folder.
+3. **If you use Codex**, rename it: `mv CLAUDE.md AGENTS.md`. Codex reads only `AGENTS.md`. Claude Code users skip this step.
+4. Open Claude Code or Codex in that folder and say *hi*.
+5. The agent reads the context file, notices the analysis tools aren't installed, asks for your permission, and runs the bootstrap itself.
 
 After that, drop your DM3s into `incoming/<batch_name>/` and ask the agent to analyze them.
 
@@ -47,7 +48,7 @@ cd ~/my-tem-project
 curl -sSL https://raw.githubusercontent.com/lilydelalande/labflow-ai/main/bootstrap.sh | sh
 ```
 
-This clones the repo into a hidden `.labflow/` cache, symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory, copies `CLAUDE.md` (and symlinks `AGENTS.md` to it), gitignores the cache + data folders, runs `uv sync` to install Python deps, and creates empty `incoming/` and `results/` folders.
+This clones the repo into a hidden `.labflow/` cache, symlinks `analysis/`, `benchmarks/`, and the lab-pipeline skill into the working directory, copies `CLAUDE.md`, gitignores the cache + data folders, runs `uv sync` to install Python deps, and creates empty `incoming/` and `results/` folders. (Codex users: `mv CLAUDE.md AGENTS.md` once after install.)
 
 To update later: re-run the same one-liner — it's safe to re-run.
 
