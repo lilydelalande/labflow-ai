@@ -174,14 +174,15 @@ def _print_report(results: list[dict]) -> int:
         if st == "no-reference":
             print(f"── {res['sample_type']}: skipped — {res.get('reason')}")
             continue
-        print(f"── {res['sample_type']}: {res['n_ref']} reference rows  "
-              f"(✓ {res['n_ok']}  ✗ {res['n_drift']}  "
-              f"missing {res['n_missing']}  errors {res['n_error']})")
+        n_measured = res["n_ok"] + res["n_drift"]
+        print(f"── {res['sample_type']}: {n_measured} of {res['n_ref']} reference rows re-measured  "
+              f"(✓ {res['n_ok']}  ✗ {res['n_drift']}  ! {res['n_error']})")
+        # Per-row entries only for cases that need attention. Healthy rows
+        # are summarised by the count above.
         for r in res["rows"]:
-            tag = {"ok": "✓", "drift": "✗", "missing-image": "·", "error": "!"}.get(r["status"], "?")
             label = f"{r['sample_name']}/{r['filename']}"
             if r["status"] == "ok":
-                print(f"  {tag} {label}")
+                print(f"  ✓ {label}")
             elif r["status"] == "drift":
                 any_drift = True
                 detail = "; ".join(
@@ -189,11 +190,12 @@ def _print_report(results: list[dict]) -> int:
                     f"(Δ {d['delta']:+.3f}, tol {d['tolerance']:.3f})"
                     for d in r["drifts"]
                 )
-                print(f"  {tag} {label}  REGRESSION: {detail}")
-            elif r["status"] == "missing-image":
-                print(f"  {tag} {label}  (source image not found at {r['image_path']})")
+                print(f"  ✗ {label}  REGRESSION: {detail}")
             elif r["status"] == "error":
-                print(f"  {tag} {label}  ERROR: {r.get('error')}")
+                print(f"  ! {label}  ERROR: {r.get('error')}")
+            # missing-image: deliberately silent at the row level — counted below
+        if res["n_missing"]:
+            print(f"        {res['n_missing']} row(s) have no source image in the references repo")
         print()
     return 1 if any_drift else 0
 
