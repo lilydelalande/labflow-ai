@@ -41,6 +41,9 @@ jobs:
         run: uv sync --frozen
 
       - name: Run regression test
+        env:
+          PYTHONUNBUFFERED: "1"   # ensure progress lines stream live to the Actions log
         run: |
           uv run python -m analysis.validate_script \
-            --references-dir "$GITHUB_WORKSPACE/.references"
+            --references-dir "$GITHUB_WORKSPACE/.references" \
+            --workers 4

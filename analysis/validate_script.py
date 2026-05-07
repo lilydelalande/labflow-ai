@@ -29,6 +29,7 @@ import argparse
 import os
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -111,12 +112,42 @@ def _compare(expected: pd.Series, actual: dict, tolerances: dict[str, float]) ->
     return drifts
 
 
+def _validate_one_row(args: tuple) -> dict:
+    """Worker fn — re-measure one image and return its row dict.
+    Top-level so ProcessPoolExecutor can pickle it."""
+    sample_type, sample_name, filename, img_path_str, ref_dict, tolerances, bmv_expected_nm = args
+    img_path = Path(img_path_str)
+    try:
+        actual = _measure_one_image(img_path, sample_type=sample_type,
+                                     expected_nm=bmv_expected_nm)
+    except Exception as exc:
+        return {"sample_name": sample_name, "filename": filename,
+                "status": "error", "error": str(exc), "drifts": []}
+    ref = pd.Series(ref_dict)
+    drifts = _compare(ref, actual, tolerances)
+    return {"sample_name": sample_name, "filename": filename,
+            "status": ("ok" if not drifts else "drift"),
+            "drifts": drifts, "actual": actual}
+
+
+def _print_row_progress(row: dict) -> None:
+    """Stream a one-line progress note as each row finishes."""
+    label = f"{row['sample_name']}/{row['filename']}"
+    if row["status"] == "ok":
+        print(f"  ✓ {label}", flush=True)
+    elif row["status"] == "drift":
+        print(f"  ✗ {label}  REGRESSION", flush=True)
+    elif row["status"] == "error":
+        print(f"  ! {label}  ERROR: {row.get('error')}", flush=True)
+
+
 def validate(
     sample_type: str,
     references_dir: Path,
     benchmarks_dir: Path = DEFAULT_BENCH,
     tolerances: dict[str, float] | None = None,
     bmv_expected_nm: float = 28.0,
+    workers: int = 4,
 ) -> dict:
     """Re-measure every reference row of one sample_type and report drifts."""
     tolerances = tolerances or DEFAULT_TOLERANCES
@@ -127,6 +158,7 @@ def validate(
 
     refs = pd.read_csv(runs_path)
     rows = []
+    work = []  # (sample_type, sample_name, filename, img_path, ref_dict, tolerances, bmv_expected_nm)
     for _, ref in refs.iterrows():
         sample_name = ref["sample_name"]
         filename    = ref["filename"]
@@ -136,18 +168,25 @@ def validate(
                          "status": "missing-image", "image_path": str(img_path),
                          "drifts": []})
             continue
-        try:
-            actual = _measure_one_image(img_path, sample_type=sample_type,
-                                         expected_nm=bmv_expected_nm)
-        except Exception as exc:  # pragma: no cover (defensive)
-            rows.append({"sample_name": sample_name, "filename": filename,
-                         "status": "error", "error": str(exc), "drifts": []})
-            continue
-        drifts = _compare(ref, actual, tolerances)
-        rows.append({"sample_name": sample_name, "filename": filename,
-                     "status": ("ok" if not drifts else "drift"),
-                     "drifts": drifts,
-                     "actual": actual})
+        work.append((sample_type, sample_name, filename, str(img_path),
+                     ref.to_dict(), tolerances, bmv_expected_nm))
+
+    print(f"  ── {sample_type}: re-measuring {len(work)} reference rows "
+          f"({len(refs) - len(work)} skipped — no source image) "
+          f"with {min(workers, max(len(work), 1))} parallel worker(s)…", flush=True)
+
+    if workers > 1 and len(work) > 1:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_validate_one_row, w) for w in work]
+            for fut in as_completed(futures):
+                row = fut.result()
+                rows.append(row)
+                _print_row_progress(row)
+    else:
+        for w in work:
+            row = _validate_one_row(w)
+            rows.append(row)
+            _print_row_progress(row)
 
     n_ok      = sum(1 for r in rows if r["status"] == "ok")
     n_drift   = sum(1 for r in rows if r["status"] == "drift")
@@ -211,6 +250,8 @@ def main() -> None:
     p.add_argument("--benchmarks-dir", type=Path, default=DEFAULT_BENCH)
     p.add_argument("--bmv-expected-nm", type=float, default=28.0,
                    help="Expected BMV capsid diameter (default 28).")
+    p.add_argument("--workers", type=int, default=4,
+                   help="Parallel worker processes (default 4). Set to 1 for serial.")
 
     # Per-metric tolerances
     p.add_argument("--tol-capsid-nm",      type=float, default=DEFAULT_TOLERANCES["capsid_median_nm"])
@@ -230,7 +271,8 @@ def main() -> None:
     results = [
         validate(st, references_dir=args.references_dir,
                  benchmarks_dir=args.benchmarks_dir,
-                 tolerances=tolerances, bmv_expected_nm=args.bmv_expected_nm)
+                 tolerances=tolerances, bmv_expected_nm=args.bmv_expected_nm,
+                 workers=args.workers)
         for st in sample_types
     ]
     code = _print_report(results)
