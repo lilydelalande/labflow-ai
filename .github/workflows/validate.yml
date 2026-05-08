@@ -42,8 +42,18 @@ jobs:
 
       - name: Run regression test
         env:
-          PYTHONUNBUFFERED: "1"   # ensure progress lines stream live to the Actions log
-          MPLBACKEND: "Agg"        # headless matplotlib (CI runners have no display)
+          PYTHONUNBUFFERED: "1"        # progress lines stream live to the Actions log
+          MPLBACKEND: "Agg"             # headless matplotlib (CI runners have no display)
+          # Pin numerical-library thread counts to 1 per worker process so multi-process
+          # parallelism doesn't introduce float-summation non-determinism. validate_script.py
+          # already sets these via os.environ.setdefault; pinning here too is belt-and-suspenders
+          # in case env-stripping wrappers interpose.
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          BLIS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"  # Apple Accelerate / vecLib (Apple Silicon NumPy default)
         run: |
           uv run python -m analysis.validate_script \
             --references-dir "$GITHUB_WORKSPACE/.references" \
