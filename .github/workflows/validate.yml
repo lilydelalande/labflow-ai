@@ -43,6 +43,7 @@ jobs:
       - name: Run regression test
         env:
           PYTHONUNBUFFERED: "1"   # ensure progress lines stream live to the Actions log
+          MPLBACKEND: "Agg"        # headless matplotlib (CI runners have no display)
         run: |
           uv run python -m analysis.validate_script \
             --references-dir "$GITHUB_WORKSPACE/.references" \

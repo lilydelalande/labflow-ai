@@ -25,10 +25,27 @@ false-positives from anything we missed).
 
 from __future__ import annotations
 
-import argparse
 import os
+
+# Force headless matplotlib backend before any worker imports vlp_measure_v2
+# / bmv_measure (which import pyplot). Avoids a Python/Tk dock icon flashing
+# on macOS for every parallel worker, and avoids GUI-backend hangs in CI.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+# Pin numerical-library thread counts to 1 so worker subprocesses are
+# *deterministic*. Without this, scikit-image's Hough circle transform
+# and CLAHE multithread internally; with 4 worker processes × N threads
+# each, accumulator-order non-determinism flips borderline particles'
+# quality classification and gives different reliable_rate from run to
+# run. Each worker stays single-threaded; multiple workers stay parallel.
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "BLIS_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
+import argparse
 import sys
 import tempfile
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -117,28 +134,33 @@ def _validate_one_row(args: tuple) -> dict:
     Top-level so ProcessPoolExecutor can pickle it."""
     sample_type, sample_name, filename, img_path_str, ref_dict, tolerances, bmv_expected_nm = args
     img_path = Path(img_path_str)
+    t0 = time.monotonic()
     try:
         actual = _measure_one_image(img_path, sample_type=sample_type,
                                      expected_nm=bmv_expected_nm)
     except Exception as exc:
         return {"sample_name": sample_name, "filename": filename,
-                "status": "error", "error": str(exc), "drifts": []}
+                "status": "error", "error": str(exc), "drifts": [],
+                "elapsed_s": time.monotonic() - t0}
+    elapsed = time.monotonic() - t0
     ref = pd.Series(ref_dict)
     drifts = _compare(ref, actual, tolerances)
     return {"sample_name": sample_name, "filename": filename,
             "status": ("ok" if not drifts else "drift"),
-            "drifts": drifts, "actual": actual}
+            "drifts": drifts, "actual": actual, "elapsed_s": elapsed}
 
 
 def _print_row_progress(row: dict) -> None:
     """Stream a one-line progress note as each row finishes."""
     label = f"{row['sample_name']}/{row['filename']}"
+    elapsed = row.get("elapsed_s")
+    timing = f"  [{elapsed:5.1f}s]" if elapsed is not None else ""
     if row["status"] == "ok":
-        print(f"  ✓ {label}", flush=True)
+        print(f"  ✓{timing} {label}", flush=True)
     elif row["status"] == "drift":
-        print(f"  ✗ {label}  REGRESSION", flush=True)
+        print(f"  ✗{timing} {label}  REGRESSION", flush=True)
     elif row["status"] == "error":
-        print(f"  ! {label}  ERROR: {row.get('error')}", flush=True)
+        print(f"  !{timing} {label}  ERROR: {row.get('error')}", flush=True)
 
 
 def validate(
@@ -260,6 +282,7 @@ def main() -> None:
     p.add_argument("--tol-wall-cv",        type=float, default=DEFAULT_TOLERANCES["median_wall_cv"])
 
     args = p.parse_args()
+    print(f"validate_script starting — references: {args.references_dir} | workers: {args.workers}", flush=True)
     tolerances = {
         "capsid_median_nm":      args.tol_capsid_nm,
         "wall_fit_success_rate": args.tol_wall_fit_rate,
@@ -268,6 +291,7 @@ def main() -> None:
     }
 
     sample_types = ["VLP", "BMV"] if args.sample_type == "all" else [args.sample_type]
+    t_start = time.monotonic()
     results = [
         validate(st, references_dir=args.references_dir,
                  benchmarks_dir=args.benchmarks_dir,
@@ -275,9 +299,11 @@ def main() -> None:
                  workers=args.workers)
         for st in sample_types
     ]
+    total_elapsed = time.monotonic() - t_start
     code = _print_report(results)
 
     print(f"Tolerances: {tolerances}")
+    print(f"Total wall-clock: {total_elapsed:.1f}s")
     if code != 0:
         print("\nFAILED — regressions found above.", file=sys.stderr)
     else:
