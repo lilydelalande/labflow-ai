@@ -1,0 +1,60 @@
+name: validate measurement scripts against reference images
+
+on:
+  pull_request:
+    paths:
+      - "analysis/**"
+      - "benchmarks/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "analysis/**"
+      - "benchmarks/**"
+  workflow_dispatch:   # manual trigger from the Actions tab
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout labflow-ai (public)
+        uses: actions/checkout@v4
+
+      - name: Checkout labflow-ai-references (private)
+        uses: actions/checkout@v4
+        with:
+          repository: lilydelalande/labflow-ai-references
+          token: ${{ secrets.REFERENCES_REPO_PAT }}
+          path: .references
+          # Reference repo is ~1 GB; checkout takes ~30s with a single
+          # commit on the default branch. No LFS.
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync Python dependencies
+        run: uv sync --frozen
+
+      - name: Run regression test
+        env:
+          PYTHONUNBUFFERED: "1"        # progress lines stream live to the Actions log
+          MPLBACKEND: "Agg"             # headless matplotlib (CI runners have no display)
+          # Pin numerical-library thread counts to 1 per worker process so multi-process
+          # parallelism doesn't introduce float-summation non-determinism. validate_script.py
+          # already sets these via os.environ.setdefault; pinning here too is belt-and-suspenders
+          # in case env-stripping wrappers interpose.
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          BLIS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"  # Apple Accelerate / vecLib (Apple Silicon NumPy default)
+        run: |
+          uv run python -m analysis.validate_script \
+            --references-dir "$GITHUB_WORKSPACE/.references" \
+            --workers 4
