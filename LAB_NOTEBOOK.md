@@ -313,3 +313,47 @@ Plot saved to `results/vlp17_v2/stain_uniformity.png` (4-panel: drop rate vs `bg
 - VLP_100 capsid +1 nm vs hand: tune `WALL_DESCENT_FRAC` per-sample, or accept as the cost of one universal value?
 - Add per-image quality summary to CSV output as a first-class column for the agent to gate on (include `bg_mean`, `bg_std`, `bg_range` from the σ = 100 nm low-pass)
 - Define the "minimum quality bar" thresholds (e.g. wall-fit success ≥ 80%, n_reliable ≥ 30) per sample type
+
+---
+
+## 2026-05-08 — BMV speedup options (future work)
+
+After getting `validate_script.py` running on the lean reference set, BMV is dominating runtime: ~75–115 s/image locally on M-series, ~2× that on x86 CI runners. VLP is 9–22 s/image (or 1–3 s for the smaller VLP_100 set). Hough circle transform on 4096×4096 images is the bottleneck.
+
+Ranked by bang-for-buck if/when speedup becomes a priority:
+
+### Quick wins (a few hours each)
+1. **Downsample for Hough detection (3–5× BMV speedup).** Hough scales as O(W·H·N_radii). Find candidate centers on a 1024×1024 (4× downsampled) image, then refine the wall fit at full 4k. We need 4k for measuring the wall edge precisely, not for finding particle centers. Decoupling the two is the cleanest single optimization. Validate with `validate_script.py` to confirm same particles are found.
+2. **Switch `skimage.transform.hough_circle` → `cv2.HoughCircles`** (5–10× on the same workload; OpenCV's C++ impl). Roughly drop-in; need to verify candidate set matches.
+3. **Vectorize per-sector wall fitting** (2–3× on that step, applies to both VLP and BMV). Currently 8 angular sectors × ~30 radii × 360 angle bins via Python `for` loops; replace with NumPy.
+4. **Skip overlay generation when `validate_script` is calling `process_image`.** Already an option in the design — just need to thread a `save_overlays=False` flag through. Saves ~1 s/image and avoids matplotlib in the hot path entirely.
+
+### Medium projects (1–2 days)
+5. **Replace CLAHE with simpler percentile stretch for BMV.** CLAHE matters for VLPs (gold contrast). For BMV, the protein–stain contrast is naturally high; a percentile stretch may be sufficient. Saves 5–10 s/image. Risk: quality filters are tuned to CLAHE-equalised images; would need re-validation.
+6. **Reuse worker processes across multiple images.** Currently each parallel worker spawns, imports `bmv_measure` (matplotlib + scipy + skimage), processes one image, exits — repeating the ~1–2 s import cost per image. Persistent workers via `multiprocessing.Pool.imap` with `chunksize > 1` cut that overhead.
+
+### Bigger projects (only if real volume demands it)
+7. **GPU acceleration** for Hough + CLAHE via `cv2.cuda.HoughCircles` or a small PyTorch port. 10–50× on CUDA hardware. Adds a GPU dependency; right answer only if the lab moves to cloud / Modal-style execution.
+8. **Replace Hough with a learned detector** (small U-Net or YOLO trained on existing BMV reference images). Faster *and* potentially more robust to weird stain conditions. Bigger lift; only worth it if BMV throughput becomes a real bottleneck.
+
+### Recommended order if/when prioritised
+Do **#1** first — biggest single win, conceptually clean (separation of "where" vs "exactly how big"), and `validate_script.py` will tell us immediately if it shifted measurements. With #1 alone, BMV likely drops from 75 s/image to 15–20 s/image; the lean reference set goes from ~4 min → ~1 min locally and ~6 min → ~2 min on CI.
+
+**#3** (vectorised wall fitting) is the next best because it benefits both VLP and BMV and is purely a refactor.
+
+Don't pursue **#7** or **#8** until BMV throughput is a real bottleneck. ROI on the downsampled Hough is much higher than on infra migration.
+
+---
+
+## 2026-05-08 — Validation made manual (CI cost)
+
+Auto-running `validate.yml` on every PR cost ~10 min of CI per run. Most PRs don't change measurement behaviour, so this was wasted compute.
+
+Switched the `validate.yml` workflow to **`workflow_dispatch` only** — manual trigger from the Actions tab. Added a separate lightweight `validate-reminder.yml` that posts a sticky comment on PRs touching `analysis/`, `benchmarks/`, or deps, reminding the author to either:
+
+- Run validate locally (~3–4 min on M-series), or
+- Trigger the manual workflow on the Actions tab.
+
+Net effect: zero auto-CI minutes spent on regression testing; reviewers still see a visible reminder when it's worth running.
+
+If BMV speedup work (above) lands and the regression run drops to ~2 min on CI, revisit and consider re-enabling auto-trigger on `pull_request` for `analysis/**` paths.

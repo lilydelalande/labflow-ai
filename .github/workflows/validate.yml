@@ -1,19 +1,18 @@
 name: validate measurement scripts against reference images
 
+# Manual trigger only. The full BMV pipeline takes ~10 min on CI runners
+# (Hough circle transform on 4k images dominates), which is too expensive
+# to auto-run on every PR.
+#
+# When you've made a change you want to verify, either:
+#   - Trigger this workflow from the Actions tab (Run workflow → main or your branch), or
+#   - Run locally:  uv run python -m analysis.validate_script --references-dir ~/Development/labflow-ai-references
+#
+# A lightweight PR-comment workflow (validate-reminder.yml) flags PRs that
+# touch measurement-relevant files so reviewers know when validation is
+# worth running.
 on:
-  pull_request:
-    paths:
-      - "analysis/**"
-      - "benchmarks/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/validate.yml"
-  push:
-    branches: [main]
-    paths:
-      - "analysis/**"
-      - "benchmarks/**"
-  workflow_dispatch:   # manual trigger from the Actions tab
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -42,8 +41,18 @@ jobs:
 
       - name: Run regression test
         env:
-          PYTHONUNBUFFERED: "1"   # ensure progress lines stream live to the Actions log
-          MPLBACKEND: "Agg"        # headless matplotlib (CI runners have no display)
+          PYTHONUNBUFFERED: "1"        # progress lines stream live to the Actions log
+          MPLBACKEND: "Agg"             # headless matplotlib (CI runners have no display)
+          # Pin numerical-library threads to 1 per worker process for deterministic
+          # results (multi-threaded BLAS / OpenMP gives accumulator-order non-determinism
+          # which can flip borderline particles across quality thresholds). validate_script.py
+          # already sets these via os.environ.setdefault, but pinning here is belt-and-suspenders
+          # in case some env-stripping wrapper interposes.
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          BLIS_NUM_THREADS: "1"
         run: |
           uv run python -m analysis.validate_script \
             --references-dir "$GITHUB_WORKSPACE/.references" \

@@ -1,0 +1,53 @@
+name: validate reminder
+
+# Lightweight PR-comment workflow. When a PR touches files that could affect
+# measurement output, post a comment reminding the author to run the
+# regression test (validate.yml is manual-only because it costs ~10 min of
+# CI per run; we don't want to auto-run on every PR).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "analysis/**"
+      - "benchmarks/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  pull-requests: write
+  issues: write   # PR comments use the issues API
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post or update reminder comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          # Marker — the action edits an existing comment with this header
+          # instead of posting a new one each push.
+          header: validate-reminder
+          message: |
+            ⚠️ This PR touches measurement-relevant code (`analysis/`, `benchmarks/`, deps).
+
+            The regression test isn't run automatically — it costs ~10 minutes of CI
+            and most PRs don't actually need it. Before merging, please either:
+
+            **A. Run locally** (~3-4 min on M-series Mac, longer on x86):
+            ```
+            uv run python -m analysis.validate_script \
+                --references-dir ~/Development/labflow-ai-references
+            ```
+
+            **B. Trigger it on CI:** go to the [Actions tab][actions], select
+            "validate measurement scripts against reference images", click
+            "Run workflow", pick this branch.
+
+            Paste the output (or the "Clean — no regressions" / "FAILED" line)
+            into a PR comment so reviewers can confirm. If you got a regression,
+            see [LAB_NOTEBOOK.md][notebook] for how to investigate before
+            re-running or relaxing tolerances.
+
+            [actions]: ${{ github.event.repository.html_url }}/actions/workflows/validate.yml
+            [notebook]: ${{ github.event.repository.html_url }}/blob/main/LAB_NOTEBOOK.md
